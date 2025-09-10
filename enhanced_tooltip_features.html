@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Enhanced Tooltip Features - DilutionTracker Extension</title>
+    <style>
+        body {
+            font-family: 'Consolas', monospace;
+            background: #1e1e1e;
+            color: #fff;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+        
+        h1 {
+            color: #4fc3f7;
+            border-bottom: 2px solid #4fc3f7;
+            padding-bottom: 10px;
+        }
+        
+        .section {
+            background: #2d2d2d;
+            border: 1px solid #555;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        
+        .highlight {
+            background: #ffeb3b;
+            color: #000;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-weight: bold;
+        }
+        
+        .code {
+            background: #000;
+            border: 1px solid #333;
+            border-radius: 4px;
+            padding: 15px;
+            font-family: 'Consolas', monospace;
+            overflow-x: auto;
+        }
+        
+        .success {
+            color: #4caf50;
+            font-weight: bold;
+        }
+        
+        .tooltip-demo {
+            background: #0d1117;
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 8px;
+            padding: 12px 14px;
+            color: #e6edf3;
+            font: 13px/1.45 -apple-system, BlinkMacSystemFont, sans-serif;
+            margin: 15px 0;
+            min-width: 280px;
+        }
+        
+        .demo-header {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            margin-bottom: 8px;
+        }
+        
+        .demo-header > div:first-child {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+        }
+        
+        .demo-price-changes {
+            display: flex;
+            gap: 8px;
+            font-size: 12px;
+        }
+        
+        .demo-price-changes > div {
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-weight: 500;
+        }
+        
+        .green { color: #00ff00; background: rgba(0,255,0,0.1); }
+        .red { color: #ff4444; background: rgba(255,68,68,0.1); }
+        
+        .demo-symbol { font-weight: 700; letter-spacing: 0.3px; }
+        .demo-updated { font-size: 11px; color: #9ba0a6; }
+        
+        .demo-body {
+            display: grid;
+            gap: 5px;
+        }
+        
+        .demo-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+        }
+        
+        .demo-row span:first-child { color: #9ba0a6; }
+        
+        .demo-company-info {
+            border-top: 1px solid rgba(255,255,255,0.08);
+            padding-top: 8px;
+            margin-top: 4px;
+        }
+        
+        .demo-footer {
+            margin-top: 6px;
+            font-size: 11px;
+            color: #6b7280;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📊 Enhanced Tooltip Features</h1>
+        
+        <div class="section">
+            <h3>✅ All Requested Features Implemented</h3>
+            <ul>
+                <li>✅ <span class="success">Shares Outstanding</span> - Added below Free Float, formatted as "30.58m shares"</li>
+                <li>✅ <span class="success">Sector, Industry, Country</span> - Extracted and displayed in company info section</li>
+                <li>✅ <span class="success">Market Cap & Enterprise Value</span> - Added to financial metrics</li>
+                <li>✅ <span class="success">Price Changes</span> - Extracted with original DilutionTracker styles</li>
+                <li>✅ <span class="success">Chrome Storage Limits</span> - 10MB total (well within our needs)</li>
+            </ul>
+        </div>
+
+        <div class="section">
+            <h3>🎯 New Tooltip Layout</h3>
+            <div class="tooltip-demo">
+                <div class="demo-header">
+                    <div>
+                        <div class="demo-symbol">$OPAD</div>
+                        <div class="demo-updated">Updated: 12/8/2024, 2:05:29 AM</div>
+                    </div>
+                    <div class="demo-price-changes">
+                        <div class="green">+$0.25 (+2.1%)</div>
+                        <div class="red">-$0.10 (-0.8%)</div>
+                    </div>
+                </div>
+                <div class="demo-body">
+                    <div class="demo-row"><span>Free Float</span><span>20.31m shares</span></div>
+                    <div class="demo-row"><span>Shares Outstanding</span><span>30.58m shares</span></div>
+                    <div class="demo-row"><span>Estimated Cash</span><span>$22.9M</span></div>
+                    <div class="demo-row"><span>Market Cap</span><span>$156.3M</span></div>
+                    <div class="demo-row"><span>Enterprise Value</span><span>$133.4M</span></div>
+                    <div class="demo-company-info">
+                        <div class="demo-row"><span>Sector</span><span>Healthcare</span></div>
+                        <div class="demo-row"><span>Industry</span><span>Biotechnology</span></div>
+                        <div class="demo-row"><span>Country</span><span>United States</span></div>
+                    </div>
+                </div>
+                <div class="demo-footer">
+                    <span>Source: DilutionTracker.com</span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h3>💾 Enhanced Storage Structure</h3>
+            <div class="code">
+ticker_OPAD: {
+  latestFloat: 20.31,
+  sharesOutstanding: 30.58,
+  estimatedCash: 22.9,
+  sector: "Healthcare",
+  industry: "Biotechnology",
+  country: "United States",
+  marketCap: "$156.3M",
+  enterpriseValue: "$133.4M",
+  regularMarketChange: {
+    text: "+$0.25 (+2.1%)",
+    styles: "color: rgb(0, 255, 0); background-color: rgba(0,255,0,0.1); font-weight: 500;"
+  },
+  extendedMarketChange: {
+    text: "-$0.10 (-0.8%)",
+    styles: "color: rgb(255, 68, 68); background-color: rgba(255,68,68,0.1); font-weight: 500;"
+  },
+  lastUpdated: 1641234567890,
+  source: "dilutiontracker.com"
+}
+            </div>
+        </div>
+
+        <div class="section">
+            <h3>🔍 Data Extraction Patterns</h3>
+            <div class="code">
+<strong>Financial Data:</strong>
+✅ "Float: 20.31M" → latestFloat: 20.31
+✅ "Shares Outstanding: 30.58M" → sharesOutstanding: 30.58
+✅ "estimated current cash of $22.9M" → estimatedCash: 22.9
+✅ "Mkt Cap: $156.3M" → marketCap: "$156.3M"
+✅ "EV: $133.4M" → enterpriseValue: "$133.4M"
+
+<strong>Company Data:</strong>
+✅ "Sector: Healthcare" → sector: "Healthcare"
+✅ "Industry: Biotechnology" → industry: "Biotechnology"
+✅ "Country: United States" → country: "United States"
+
+<strong>Price Changes (with styles):</strong>
+✅ #header-price-change-regular-mkt → regularMarketChange
+✅ #header-price-change-extended-mkt → extendedMarketChange
+            </div>
+        </div>
+
+        <div class="section">
+            <h3>📝 Chrome Extension Storage Limits</h3>
+            <ul>
+                <li><strong>chrome.storage.local</strong>: <span class="highlight">10MB total</span> (unlimited items until limit)</li>
+                <li><strong>chrome.storage.sync</strong>: 100KB total, max 8KB per item, max 512 items</li>
+                <li><strong>Data retention</strong>: Indefinite (until user clears extension data)</li>
+                <li><strong>Our usage</strong>: ~100 tickers × ~500 bytes = ~50KB total</li>
+                <li><strong>Verdict</strong>: <span class="success">Well within limits!</span></li>
+            </ul>
+        </div>
+
+        <div class="section">
+            <h3>🚀 Key Improvements</h3>
+            <ul>
+                <li>✅ <strong>Comprehensive Data</strong> - 11 data fields instead of 4</li>
+                <li>✅ <strong>Live Price Changes</strong> - With original DilutionTracker styling</li>
+                <li>✅ <strong>Company Context</strong> - Sector, Industry, Country information</li>
+                <li>✅ <strong>Enhanced Layout</strong> - Better organized with company info section</li>
+                <li>✅ <strong>Smart Caching</strong> - Only updates when any field changes</li>
+                <li>✅ <strong>Proper Formatting</strong> - "m shares" for float values</li>
+                <li>✅ <strong>Wider Tooltip</strong> - 280-380px to accommodate more data</li>
+            </ul>
+        </div>
+
+        <div class="section">
+            <h3>🧪 Testing Workflow</h3>
+            <ol>
+                <li><strong>Visit DilutionTracker</strong>: Go to <code>dilutiontracker.com/app/search/OPAD</code></li>
+                <li><strong>Check Console</strong>: Should see data extraction logs</li>
+                <li><strong>Verify Storage</strong>: Extension DevTools → Storage → Local Storage</li>
+                <li><strong>Test Tooltip</strong>: Hover over <code>$OPAD</code> on any website</li>
+                <li><strong>Verify Display</strong>: Should show all 11 data fields with proper formatting</li>
+            </ol>
+        </div>
+    </div>
+</body>
+</html>

@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test OPAD Float Data</title>
+</head>
+<body>
+    <h1>Test OPAD Float Data</h1>
+    <p><strong>Note:</strong> This test page will use mock data since it's not running in Chrome extension context.</p>
+    <p>For real data, load this as a Chrome extension. Check the console for results.</p>
+    <div>$OPAD should show tooltip on hover (when loaded as extension)</div>
+    <div>Test symbols: $OPAD, $TSLA, $AAPL, $SPY</div>
+    
+    <script src="dilution_tracker_enhanced.js"></script>
+    <script src="debug_test.js"></script>
+    <script>
+        console.log('🚀 Page loaded, running tests...');
+        
+        // Wait a bit for scripts to load
+        setTimeout(() => {
+            console.log('🔧 Running detailed test...');
+            testOPAD();
+        }, 1000);
+        
+        async function testOPAD() {
+            console.log('🧪 Testing OPAD float data...');
+            
+            // Check if functions are available
+            console.log('Available getFloatData:', typeof getFloatData);
+            console.log('Available DilutionTrackerAPI:', typeof DilutionTrackerAPI);
+            
+            try {
+                console.log('📞 Calling getFloatData...');
+                const result = await getFloatData('OPAD');
+                console.log('📊 OPAD float data result:', result);
+                if (result !== null) {
+                    console.log('✅ Success: Got float data for OPAD:', result);
+                } else {
+                    console.log('❌ No float data returned for OPAD');
+                }
+            } catch (error) {
+                console.error('❌ Error testing OPAD:', error);
+                console.error('Error details:', error.message);
+                console.error('Error stack:', error.stack);
+            }
+        }
+    </script>
+</body>
+</html>

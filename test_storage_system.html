@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Storage System Test - DilutionTracker Extension</title>
+    <style>
+        body {
+            font-family: 'Consolas', monospace;
+            background: #1e1e1e;
+            color: #fff;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+        
+        h1 {
+            color: #4fc3f7;
+            border-bottom: 2px solid #4fc3f7;
+            padding-bottom: 10px;
+        }
+        
+        .section {
+            background: #2d2d2d;
+            border: 1px solid #555;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        
+        .highlight {
+            background: #ffeb3b;
+            color: #000;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-weight: bold;
+        }
+        
+        .code {
+            background: #000;
+            border: 1px solid #333;
+            border-radius: 4px;
+            padding: 15px;
+            font-family: 'Consolas', monospace;
+            overflow-x: auto;
+        }
+        
+        .success {
+            color: #4caf50;
+            font-weight: bold;
+        }
+        
+        .warning {
+            color: #ff9800;
+            font-weight: bold;
+        }
+        
+        .error {
+            color: #f44336;
+            font-weight: bold;
+        }
+        
+        ul {
+            padding-left: 20px;
+        }
+        
+        li {
+            margin: 8px 0;
+        }
+        
+        .ticker-demo {
+            background: linear-gradient(45deg, #1e3c72, #2a5298);
+            padding: 15px;
+            border-radius: 8px;
+            margin: 15px 0;
+            text-align: center;
+        }
+        
+        .ticker-demo span {
+            font-size: 18px;
+            font-weight: bold;
+            color: #4fc3f7;
+            cursor: pointer;
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔄 New DilutionTracker Storage System</h1>
+        
+        <div class="section">
+            <h3>✅ System Overview</h3>
+            <p>The extension now uses a completely different approach that eliminates all authentication issues:</p>
+            
+            <ul>
+                <li>✅ <span class="success">No API calls</span> - eliminates authentication problems</li>
+                <li>✅ <span class="success">Content script injection</span> - reads data directly from logged-in pages</li>
+                <li>✅ <span class="success">Extension storage</span> - caches data locally with diff checking</li>
+                <li>✅ <span class="success">Real-time updates</span> - data updates as user browses DilutionTracker</li>
+            </ul>
+        </div>
+        
+        <div class="section">
+            <h3>🎯 How It Works</h3>
+            <ol>
+                <li><strong>User visits DilutionTracker:</strong> Goes to <span class="highlight">dilutiontracker.com/app/search/OPAD</span></li>
+                <li><strong>Content script extracts data:</strong> Reads from <span class="highlight">#company-description-float-wrapper</span></li>
+                <li><strong>Data stored locally:</strong> Saves <span class="highlight">latestFloat</span> and <span class="highlight">sharesOutstanding</span></li>
+                <li><strong>Tooltip shows stored data:</strong> Displays cached values on other websites</li>
+            </ol>
+        </div>
+        
+        <div class="section">
+            <h3>📊 Data Extraction Examples</h3>
+            <p>The content script can parse various data formats:</p>
+            
+            <div class="code">
+                <strong>Float Data:</strong><br>
+                ✅ "Float: 12.5M" → latestFloat: 12.5<br>
+                ✅ "Float & OS: 12.5M / 25.0M" → latestFloat: 12.5, sharesOutstanding: 25.0<br>
+                ✅ "Float 12.5M OS 25.0M" → latestFloat: 12.5, sharesOutstanding: 25.0<br>
+                ✅ "12.5M Float" → latestFloat: 12.5<br>
+                <br>
+                <strong>Cash Data:</strong><br>
+                ✅ "estimated current cash of $22.9M" → estimatedCash: 22.9<br>
+                ✅ "current cash of $22.9M" → estimatedCash: 22.9<br>
+                ✅ "cash of $22.9M" → estimatedCash: 22.9<br>
+                <br>
+                ❌ "Login to view data" → Ignored (user not logged in)
+            </div>
+        </div>
+        
+        <div class="section">
+            <h3>💾 Extension Storage Structure</h3>
+            <div class="code">
+ticker_OPAD: {
+  latestFloat: 12.5,
+  sharesOutstanding: 25.0,
+  estimatedCash: 22.9,
+  lastUpdated: 1641234567890,
+  source: "dilutiontracker.com"
+}
+
+ticker_list: ["OPAD", "TSLA", "SPY", ...]
+            </div>
+        </div>
+        
+        <div class="section">
+            <h3>🧪 Testing Instructions</h3>
+            <ol>
+                <li><strong>Install the extension</strong> with updated manifest.json</li>
+                <li><strong>Go to DilutionTracker:</strong> Visit <code>https://dilutiontracker.com/app/search/OPAD</code></li>
+                <li><strong>Check console:</strong> Should see "DilutionTracker content script loaded"</li>
+                <li><strong>Wait for extraction:</strong> Should see "Stored data for OPAD" in console</li>
+                <li><strong>Test tooltip:</strong> Hover over <span class="ticker-demo"><span>$OPAD</span></span> on any other website</li>
+                <li><strong>Check storage:</strong> Extension should show stored float data</li>
+            </ol>
+        </div>
+        
+        <div class="section">
+            <h3>⚠️ Requirements</h3>
+            <ul>
+                <li><span class="warning">User must be logged into DilutionTracker</span></li>
+                <li><span class="warning">User must visit ticker pages to populate data</span></li>
+                <li><span class="success">No authentication setup required</span></li>
+                <li><span class="success">No API keys or credentials needed</span></li>
+                <li><span class="success">Works entirely offline after data collection</span></li>
+            </ul>
+        </div>
+        
+        <div class="section">
+            <h3>📁 Files Modified</h3>
+            <ul>
+                <li>✅ <strong>dilutiontracker_content.js</strong> - New content script for data extraction</li>
+                <li>✅ <strong>manifest.json</strong> - Added DilutionTracker content script</li>
+                <li>✅ <strong>content.js</strong> - Updated to use stored data instead of API calls</li>
+                <li>✅ <strong>service_worker.js</strong> - Updated to use stored data instead of API calls</li>
+                <li>❌ <strong>dilution_tracker_enhanced.js</strong> - No longer needed</li>
+                <li>❌ <strong>dilution_tracker_simple.js</strong> - No longer needed</li>
+            </ul>
+        </div>
+        
+        <div class="section">
+            <h3>🎉 Benefits</h3>
+            <ul>
+                <li>✅ <span class="success">No timeout issues</span> - data extraction is instant</li>
+                <li>✅ <span class="success">No CORS problems</span> - content script runs in page context</li>
+                <li>✅ <span class="success">No authentication complexity</span> - uses existing user login</li>
+                <li>✅ <span class="success">Efficient resource usage</span> - only updates when data changes</li>
+                <li>✅ <span class="success">Reliable data source</span> - same data user sees on DilutionTracker</li>
+            </ul>
+        </div>
+    </div>
+</body>
+</html>

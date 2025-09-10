@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OPAD Float Test - DilutionTracker</title>
+    <style>
+        body {
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            background-color: #1e1e1e;
+            color: #ffffff;
+            padding: 20px;
+            margin: 0;
+        }
+        
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+        
+        h1 {
+            color: #4fc3f7;
+            border-bottom: 2px solid #4fc3f7;
+            padding-bottom: 10px;
+        }
+        
+        .test-section {
+            background: #2d2d2d;
+            border: 1px solid #555;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        
+        .test-results {
+            background: #000;
+            border: 1px solid #333;
+            border-radius: 4px;
+            padding: 15px;
+            font-size: 14px;
+            line-height: 1.4;
+            white-space: pre-wrap;
+            overflow-x: auto;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        
+        button {
+            background: #4fc3f7;
+            color: #000;
+            border: none;
+            padding: 12px 24px;
+            font-size: 16px;
+            font-weight: bold;
+            border-radius: 6px;
+            cursor: pointer;
+            margin: 10px 5px;
+        }
+        
+        button:hover {
+            background: #29b6f6;
+        }
+        
+        button:disabled {
+            background: #666;
+            cursor: not-allowed;
+        }
+        
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+        
+        .status.info {
+            background: #0d47a1;
+            border: 1px solid #1976d2;
+        }
+        
+        .status.success {
+            background: #1b5e20;
+            border: 1px solid #388e3c;
+        }
+        
+        .status.error {
+            background: #b71c1c;
+            border: 1px solid #d32f2f;
+        }
+        
+        .status.warning {
+            background: #e65100;
+            border: 1px solid #f57c00;
+        }
+        
+        .highlight {
+            background: #ffeb3b;
+            color: #000;
+            padding: 2px 4px;
+            border-radius: 2px;
+        }
+        
+        .note {
+            background: #424242;
+            border-left: 4px solid #4fc3f7;
+            padding: 15px;
+            margin: 15px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🧪 DilutionTracker OPAD Float Test</h1>
+        
+        <div class="note">
+            <strong>📋 Test Overview:</strong><br>
+            This test will attempt to fetch the free float data for OPAD from DilutionTracker.com.<br>
+            It will verify the AWS WAF bypass mechanism and JavaScript authentication detection.
+        </div>
+        
+        <div class="test-section">
+            <h3>🎯 Test Controls</h3>
+            <button id="testBtn" onclick="runOPADTest()">🚀 Run OPAD Test</button>
+            <button id="clearBtn" onclick="clearResults()">🗑️ Clear Results</button>
+            <button id="testCacheBtn" onclick="testCache()" disabled>⚡ Test Cache</button>
+        </div>
+        
+        <div class="test-section">
+            <h3>📊 Test Status</h3>
+            <div id="status" class="status info">Ready to test OPAD float fetching</div>
+        </div>
+        
+        <div class="test-section">
+            <h3>📋 Console Output</h3>
+            <div id="results" class="test-results">Console output will appear here...\n</div>
+        </div>
+        
+        <div class="test-section">
+            <h3>💡 Expected Behavior</h3>
+            <ul>
+                <li><strong>Success Case:</strong> Float data returned (e.g., "20.31M" or numeric value)</li>
+                <li><strong>Authentication Required:</strong> Manual login prompt if AWS WAF blocks</li>
+                <li><strong>Not Found:</strong> Null result if OPAD not in database</li>
+                <li><strong>Network Error:</strong> CORS or fetch errors due to browser restrictions</li>
+            </ul>
+        </div>
+        
+        <div class="note">
+            <strong>⚠️ Browser Limitations:</strong><br>
+            This test runs in a browser context and may hit CORS restrictions. 
+            The real implementation runs in a Chrome extension service worker with host permissions.
+        </div>
+    </div>
+
+    <script src="dilution_tracker_enhanced.js"></script>
+    <script>
+        let testRunning = false;
+        let logBuffer = '';
+        
+        // Override console.log to capture output
+        const originalLog = console.log;
+        const originalError = console.error;
+        const originalWarn = console.warn;
+        
+        function logToBuffer(type, ...args) {
+            const timestamp = new Date().toLocaleTimeString();
+            const message = args.map(arg => 
+                typeof arg === 'object' ? JSON.stringify(arg, null, 2) : String(arg)
+            ).join(' ');
+            
+            logBuffer += `[${timestamp}] ${type.toUpperCase()}: ${message}\n`;
+            updateResults();
+            
+            // Also log to actual console
+            if (type === 'error') originalError(...args);
+            else if (type === 'warn') originalWarn(...args);
+            else originalLog(...args);
+        }
+        
+        console.log = (...args) => logToBuffer('info', ...args);
+        console.error = (...args) => logToBuffer('error', ...args);
+        console.warn = (...args) => logToBuffer('warn', ...args);
+        
+        function updateResults() {
+            document.getElementById('results').textContent = logBuffer;
+            // Auto-scroll to bottom
+            const resultsEl = document.getElementById('results');
+            resultsEl.scrollTop = resultsEl.scrollHeight;
+        }
+        
+        function updateStatus(message, type = 'info') {
+            const statusEl = document.getElementById('status');
+            statusEl.textContent = message;
+            statusEl.className = `status ${type}`;
+        }
+        
+        function clearResults() {
+            logBuffer = '';
+            updateResults();
+            updateStatus('Results cleared - ready for new test', 'info');
+        }
+        
+        async function runOPADTest() {
+            if (testRunning) return;
+            
+            testRunning = true;
+            document.getElementById('testBtn').disabled = true;
+            document.getElementById('testCacheBtn').disabled = true;
+            
+            updateStatus('🔄 Running OPAD float test...', 'info');
+            
+            console.log('🧪 Starting OPAD Float Test');
+            console.log('═'.repeat(50));
+            console.log('🎯 Target: OPAD free float from DilutionTracker');
+            console.log('🔧 Context: Browser (CORS limitations expected)');
+            console.log('');
+            
+            try {
+                // Check if getFloatData is available
+                if (typeof getFloatData !== 'function') {
+                    throw new Error('getFloatData function not available - script import may have failed');
+                }
+                
+                console.log('📡 Calling getFloatData("OPAD")...');
+                const startTime = Date.now();
+                
+                const floatData = await getFloatData('OPAD');
+                
+                const endTime = Date.now();
+                const duration = ((endTime - startTime) / 1000).toFixed(2);
+                
+                console.log('');
+                console.log('📊 TEST RESULTS:');
+                console.log('═'.repeat(30));
+                console.log(`⏱️  Duration: ${duration}s`);
+                console.log(`📈 Float Data: ${floatData}`);
+                console.log(`🔢 Data Type: ${typeof floatData}`);
+                
+                if (floatData !== null && floatData !== undefined) {
+                    console.log('✅ SUCCESS: Float data retrieved!');
+                    updateStatus(`✅ Success: OPAD float = ${floatData}`, 'success');
+                    
+                    // Enable cache test
+                    document.getElementById('testCacheBtn').disabled = false;
+                } else {
+                    console.log('❌ RESULT: No float data received');
+                    updateStatus('❌ No data received - check console for details', 'error');
+                }
+                
+            } catch (error) {
+                console.error('❌ TEST FAILED:');
+                console.error(`Error: ${error.message}`);
+                console.error(`Stack: ${error.stack}`);
+                
+                updateStatus(`❌ Test failed: ${error.message}`, 'error');
+                
+                // Provide helpful error analysis
+                console.log('');
+                console.log('🔍 Error Analysis:');
+                if (error.message.includes('CORS')) {
+                    console.log('   💡 CORS policy blocking - expected in browser context');
+                    console.log('   💡 Extension service worker has host permissions to bypass this');
+                } else if (error.message.includes('fetch')) {
+                    console.log('   💡 Network fetch failed - may be AWS WAF protection');
+                } else {
+                    console.log('   💡 Unexpected error - check implementation');
+                }
+            }
+            
+            console.log('');
+            console.log('🏁 Test completed');
+            console.log('═'.repeat(50));
+            
+            testRunning = false;
+            document.getElementById('testBtn').disabled = false;
+        }
+        
+        async function testCache() {
+            if (testRunning) return;
+            
+            testRunning = true;
+            updateStatus('🔄 Testing cache performance...', 'info');
+            
+            console.log('');
+            console.log('⚡ Cache Performance Test');
+            console.log('─'.repeat(30));
+            
+            try {
+                const startTime = Date.now();
+                const cachedData = await getFloatData('OPAD');
+                console.log(cachedData);
+                console.log('cachedData');
+                const endTime = Date.now();
+                const duration = ((endTime - startTime) / 1000).toFixed(2);
+                
+                console.log(`⚡ Cached call duration: ${duration}s`);
+                console.log(`📊 Cached result: ${cachedData}`);
+                
+                if (duration < 1.0) {
+                    console.log('✅ Cache working properly (fast response)');
+                    updateStatus(`✅ Cache working: ${duration}s response`, 'success');
+                } else {
+                    console.log('⚠️ Cache may not be working (slow response)');
+                    updateStatus(`⚠️ Slow cache: ${duration}s response`, 'warning');
+                }
+                
+            } catch (error) {
+                console.error('❌ Cache test failed:', error);
+                updateStatus('❌ Cache test failed', 'error');
+            }
+            
+            testRunning = false;
+        }
+        
+        // Initialize
+        console.log('🚀 OPAD Float Test Page Loaded');
+        console.log('📋 Ready to test DilutionTracker integration');
+        console.log('⚠️ Note: Browser context has CORS limitations');
+        console.log('');
+    </script>
+</body>
+</html>

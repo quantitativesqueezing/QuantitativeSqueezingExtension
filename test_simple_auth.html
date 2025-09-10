@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simple Authentication Test - OPAD</title>
+    <style>
+        body {
+            font-family: 'Consolas', 'Monaco', monospace;
+            background: #1e1e1e;
+            color: #fff;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        
+        h1 {
+            color: #4fc3f7;
+            border-bottom: 2px solid #4fc3f7;
+            padding-bottom: 10px;
+        }
+        
+        .test-section {
+            background: #2d2d2d;
+            border: 1px solid #555;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        
+        .results {
+            background: #000;
+            border: 1px solid #333;
+            border-radius: 4px;
+            padding: 15px;
+            font-size: 14px;
+            white-space: pre-wrap;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        
+        button {
+            background: #4fc3f7;
+            color: #000;
+            border: none;
+            padding: 12px 24px;
+            font-size: 16px;
+            font-weight: bold;
+            border-radius: 6px;
+            cursor: pointer;
+            margin: 10px 5px;
+        }
+        
+        button:hover {
+            background: #29b6f6;
+        }
+        
+        button:disabled {
+            background: #666;
+            cursor: not-allowed;
+        }
+        
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+        
+        .status.success { background: #1b5e20; border: 1px solid #388e3c; }
+        .status.error { background: #b71c1c; border: 1px solid #d32f2f; }
+        .status.info { background: #0d47a1; border: 1px solid #1976d2; }
+        
+        .highlight {
+            background: #ffeb3b;
+            color: #000;
+            padding: 2px 4px;
+            border-radius: 2px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>⚡ Simple Authentication Test</h1>
+        
+        <div class="test-section">
+            <h3>🎯 Fast OPAD Float Test</h3>
+            <p>This test uses the simplified authentication approach based on AWS WAF bypass research.</p>
+            <p><strong>Expected time:</strong> 2-5 seconds (not 90+ seconds!)</p>
+            
+            <button id="testBtn" onclick="runTest()">🚀 Test OPAD Float (Fast)</button>
+            <button onclick="clearResults()">🗑️ Clear</button>
+        </div>
+        
+        <div class="test-section">
+            <h3>📊 Test Status</h3>
+            <div id="status" class="status info">Ready to test simplified authentication</div>
+        </div>
+        
+        <div class="test-section">
+            <h3>📋 Results</h3>
+            <div id="results" class="results">Click "Test OPAD Float" to start...\n</div>
+        </div>
+        
+        <div class="test-section">
+            <h3>🔍 Key Changes</h3>
+            <ul>
+                <li>✅ <span class="highlight">Simplified authentication</span> - just establish session cookies</li>
+                <li>✅ <span class="highlight">15 second timeout</span> instead of 90 seconds</li>
+                <li>✅ <span class="highlight">Minimal delays</span> - 1-2 seconds for JS, not 5-8 seconds</li>
+                <li>✅ <span class="highlight">Direct approach</span> - visit dilutiontracker.com → test API</li>
+                <li>❌ Removed complex multi-step browsing patterns</li>
+                <li>❌ Removed excessive AWS WAF "bypass" logic</li>
+            </ul>
+        </div>
+    </div>
+
+    <script src="dilution_tracker_simple.js"></script>
+    <script>
+        let testRunning = false;
+        let logBuffer = '';
+        
+        // Capture console output
+        const originalLog = console.log;
+        const originalError = console.error;
+        const originalWarn = console.warn;
+        
+        function logToBuffer(type, ...args) {
+            const timestamp = new Date().toLocaleTimeString();
+            const message = args.map(arg => 
+                typeof arg === 'object' ? JSON.stringify(arg, null, 2) : String(arg)
+            ).join(' ');
+            
+            logBuffer += `[${timestamp}] ${message}\n`;
+            updateResults();
+            
+            // Also log to actual console
+            if (type === 'error') originalError(...args);
+            else if (type === 'warn') originalWarn(...args);
+            else originalLog(...args);
+        }
+        
+        console.log = (...args) => logToBuffer('info', ...args);
+        console.error = (...args) => logToBuffer('error', ...args);
+        console.warn = (...args) => logToBuffer('warn', ...args);
+        
+        function updateResults() {
+            document.getElementById('results').textContent = logBuffer;
+            const resultsEl = document.getElementById('results');
+            resultsEl.scrollTop = resultsEl.scrollHeight;
+        }
+        
+        function updateStatus(message, type = 'info') {
+            const statusEl = document.getElementById('status');
+            statusEl.textContent = message;
+            statusEl.className = `status ${type}`;
+        }
+        
+        function clearResults() {
+            logBuffer = '';
+            updateResults();
+            updateStatus('Results cleared - ready for new test', 'info');
+        }
+        
+        async function runTest() {
+            if (testRunning) return;
+            
+            testRunning = true;
+            document.getElementById('testBtn').disabled = true;
+            
+            updateStatus('🔄 Running simplified authentication test...', 'info');
+            
+            console.log('⚡ SIMPLIFIED AUTHENTICATION TEST');
+            console.log('═'.repeat(50));
+            console.log('🎯 Target: OPAD float via simplified auth');
+            console.log('⏱️ Expected: 2-5 seconds (not 90+!)');
+            console.log('');
+            
+            try {
+                const startTime = Date.now();
+                
+                console.log('📡 Calling getFloatData("OPAD")...');
+                const floatData = await getFloatData('OPAD');
+                
+                const endTime = Date.now();
+                const duration = ((endTime - startTime) / 1000).toFixed(2);
+                
+                console.log('');
+                console.log('📊 RESULTS:');
+                console.log('═'.repeat(30));
+                console.log(`⏱️  Duration: ${duration}s`);
+                console.log(`📈 Float Data: ${floatData}`);
+                console.log(`🔢 Data Type: ${typeof floatData}`);
+                
+                if (floatData !== null && floatData !== undefined) {
+                    console.log('✅ SUCCESS: Simple auth worked!');
+                    updateStatus(`✅ Success: OPAD = ${floatData} (${duration}s)`, 'success');
+                    
+                    if (parseFloat(duration) < 10) {
+                        console.log('🎉 EXCELLENT: Authentication completed in under 10 seconds!');
+                    } else if (parseFloat(duration) < 30) {
+                        console.log('✅ GOOD: Authentication completed reasonably fast');
+                    } else {
+                        console.log('⚠️ SLOW: Still taking longer than expected');
+                    }
+                } else {
+                    console.log('❌ RESULT: No float data received');
+                    updateStatus(`❌ No data received (${duration}s)`, 'error');
+                }
+                
+            } catch (error) {
+                const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+                console.error('❌ TEST FAILED:');
+                console.error(`Error: ${error.message}`);
+                console.error(`Duration: ${duration}s`);
+                
+                updateStatus(`❌ Test failed: ${error.message} (${duration}s)`, 'error');
+                
+                if (error.message.includes('CORS')) {
+                    console.log('💡 CORS error - expected in browser context');
+                } else if (error.message.includes('timeout')) {
+                    console.log('💡 Timeout - authentication still taking too long');
+                } else {
+                    console.log('💡 Unexpected error - check implementation');
+                }
+            }
+            
+            console.log('');
+            console.log('🏁 Test completed');
+            console.log('═'.repeat(50));
+            
+            testRunning = false;
+            document.getElementById('testBtn').disabled = false;
+        }
+        
+        // Initialize
+        console.log('⚡ Simple Authentication Test Page Loaded');
+        console.log('🎯 Goal: Fast authentication (2-5 seconds)');
+        console.log('');
+    </script>
+</body>
+</html>
