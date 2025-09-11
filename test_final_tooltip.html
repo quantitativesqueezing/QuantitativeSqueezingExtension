@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Final Tooltip Test - Enhanced Fintel.io Data</title>
+    <link rel="stylesheet" href="css/tooltip.css">
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 20px; 
+            line-height: 1.6;
+            background: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .test-section { 
+            margin: 20px 0; 
+            padding: 15px; 
+            background: #f9f9f9; 
+            border-radius: 5px; 
+            border-left: 4px solid #2196f3;
+        }
+        .ticker-test {
+            background: linear-gradient(45deg, #ffeb3b, #ffc107);
+            padding: 8px 15px;
+            margin: 10px;
+            cursor: pointer;
+            display: inline-block;
+            border-radius: 5px;
+            font-weight: bold;
+            color: #333;
+            transition: all 0.3s ease;
+            border: 2px solid #ff9800;
+        }
+        .ticker-test:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+        }
+        .log { 
+            background: #1e1e1e; 
+            color: #fff; 
+            padding: 15px; 
+            border-radius: 5px; 
+            margin: 10px 0; 
+            height: 300px; 
+            overflow-y: auto; 
+            font-family: 'Courier New', monospace;
+            font-size: 11px;
+            border: 1px solid #333;
+        }
+        .instructions {
+            background: #e8f5e8;
+            padding: 15px;
+            border-radius: 5px;
+            border-left: 4px solid #4caf50;
+            margin-bottom: 20px;
+        }
+        .status-panel {
+            background: #fff3e0;
+            padding: 15px;
+            border-radius: 5px;
+            border-left: 4px solid #ff9800;
+            margin: 10px 0;
+        }
+        .field-checklist {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 10px;
+            margin: 15px 0;
+        }
+        .field-check {
+            background: white;
+            padding: 8px;
+            border-radius: 3px;
+            border: 1px solid #ddd;
+            font-family: monospace;
+            font-size: 11px;
+        }
+        .field-check.found { border-color: #4caf50; background: #e8f5e8; }
+        .field-check.missing { border-color: #f44336; background: #ffebee; }
+        button {
+            background: #2196f3;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+            transition: background 0.3s ease;
+        }
+        button:hover { background: #1976d2; }
+        button.success { background: #4caf50; }
+        button.warning { background: #ff9800; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 Final Tooltip Test - Enhanced Fintel.io Data</h1>
+        
+        <div class="instructions">
+            <h3>Testing Steps:</h3>
+            <ol>
+                <li>✅ Ensure Chrome extension is loaded</li>
+                <li>🌐 Visit: <strong>https://fintel.io/ss/us/OPAD</strong> (or any ticker)</li>
+                <li>⏳ Wait for fintel.io data extraction (check console)</li>
+                <li>🔄 Return to this page</li>
+                <li>🖱️ Hover over ticker symbols below</li>
+                <li>👀 Verify enhanced tooltip shows fintel.io data</li>
+            </ol>
+        </div>
+
+        <div class="status-panel">
+            <h3>🔧 System Status</h3>
+            <button onclick="checkExtensionStatus()">Check Extension</button>
+            <button onclick="injectTestData()" class="success">Inject Test Data</button>
+            <button onclick="clearTestData()" class="warning">Clear Test Data</button>
+            <div id="status-output"></div>
+        </div>
+
+        <div class="test-section">
+            <h2>🎯 Test Ticker Symbols</h2>
+            <p><strong>Hover over these symbols to test the enhanced tooltip:</strong></p>
+            
+            <div class="ticker-test">$OPAD</div>
+            <div class="ticker-test">$TSLA</div>
+            <div class="ticker-test">$AAPL</div>
+            <div class="ticker-test">$GME</div>
+            <div class="ticker-test">$AMC</div>
+            <div class="ticker-test">$PLTR</div>
+            <div class="ticker-test">$BBBY</div>
+            <div class="ticker-test">$SPRT</div>
+        </div>
+
+        <div class="test-section">
+            <h2>📊 Field Verification</h2>
+            <p>Expected fields in tooltip (will update when tooltip is detected):</p>
+            <div id="field-checklist" class="field-checklist">
+                <div class="field-check" id="field-shortInterest">Short Interest: Not checked</div>
+                <div class="field-check" id="field-shortInterestRatio">Short Interest Ratio: Not checked</div>
+                <div class="field-check" id="field-shortInterestPercentFloat">Short Interest % Float: Not checked</div>
+                <div class="field-check" id="field-costToBorrow">Cost To Borrow: Not checked</div>
+                <div class="field-check" id="field-shortSharesAvailable">Short Shares Available: Not checked</div>
+                <div class="field-check" id="field-finraExemptVolume">FINRA Exempt Volume: Not checked</div>
+                <div class="field-check" id="field-failureToDeliver">Failure To Deliver: Not checked</div>
+                <div class="field-check" id="field-lastDataUpdate">Last Data Update: Not checked</div>
+            </div>
+        </div>
+
+        <div class="test-section">
+            <h2>🔍 Debug Console</h2>
+            <button onclick="clearLog()">Clear Log</button>
+            <button onclick="monitorTooltips()">Start Monitoring</button>
+            <div id="log" class="log"></div>
+        </div>
+    </div>
+
+    <script>
+        let tooltipObserver = null;
+        let isMonitoring = false;
+
+        function log(message) {
+            const logDiv = document.getElementById('log');
+            const timestamp = new Date().toLocaleTimeString();
+            const logEntry = `[${timestamp}] ${message}`;
+            logDiv.innerHTML += logEntry + '<br>';
+            logDiv.scrollTop = logDiv.scrollHeight;
+            console.log(message);
+        }
+
+        function clearLog() {
+            document.getElementById('log').innerHTML = '';
+        }
+
+        async function checkExtensionStatus() {
+            const output = document.getElementById('status-output');
+            try {
+                if (!chrome || !chrome.storage) {
+                    throw new Error('Chrome extension APIs not available');
+                }
+
+                log('🔧 Checking extension status...');
+                
+                // Check if we have access to storage
+                const testResult = await chrome.storage.local.get('test');
+                log('✅ Extension storage access: OK');
+                
+                // Check for ticker data
+                const allData = await chrome.storage.local.get(null);
+                const tickerKeys = Object.keys(allData).filter(key => key.startsWith('ticker_'));
+                
+                if (tickerKeys.length === 0) {
+                    output.innerHTML = `<div style="color: #f44336;">⚠️ No ticker data found. Visit fintel.io pages first.</div>`;
+                    log('❌ No ticker data in storage');
+                } else {
+                    output.innerHTML = `<div style="color: #4caf50;">✅ Found data for ${tickerKeys.length} tickers: ${tickerKeys.map(k => k.replace('ticker_', '')).join(', ')}</div>`;
+                    log(`✅ Found data for tickers: ${tickerKeys.map(k => k.replace('ticker_', '')).join(', ')}`);
+                }
+
+            } catch (error) {
+                output.innerHTML = `<div style="color: #f44336;">❌ Error: ${error.message}</div>`;
+                log(`❌ Extension status error: ${error.message}`);
+            }
+        }
+
+        async function injectTestData() {
+            try {
+                log('💉 Injecting comprehensive test data...');
+                
+                const testData = {
+                    // Original fields
+                    latestFloat: 25.5,
+                    estimatedCash: 150,
+                    lastUpdated: Date.now(),
+                    
+                    // Enhanced Fintel.io fields  
+                    shortInterest: '12.34%',
+                    shortInterestRatio: '2.5 days',
+                    shortInterestPercentFloat: '15.67%',
+                    costToBorrow: '8.25%',
+                    shortSharesAvailable: '150,000',
+                    finraExemptVolume: '1.2M',
+                    failureToDeliver: '50,000',
+                    lastDataUpdate: '2024-03-15 16:00:00 EST',
+                    
+                    // Additional fields
+                    sector: 'Technology',
+                    industry: 'Software',
+                    country: 'United States',
+                    source: 'fintel.io',
+                    extractedAt: new Date().toISOString()
+                };
+                
+                await chrome.storage.local.set({
+                    'ticker_OPAD': testData,
+                    'ticker_TSLA': { ...testData, shortInterest: '3.21%', costToBorrow: '0.25%' },
+                    'ticker_AAPL': { ...testData, shortInterest: '1.05%', costToBorrow: '0.15%' }
+                });
+                
+                document.getElementById('status-output').innerHTML = 
+                    '<div style="color: #4caf50;">✅ Test data injected successfully</div>';
+                log('✅ Test data injection completed');
+                
+            } catch (error) {
+                document.getElementById('status-output').innerHTML = 
+                    `<div style="color: #f44336;">❌ Failed to inject test data: ${error.message}</div>`;
+                log(`❌ Test data injection failed: ${error.message}`);
+            }
+        }
+
+        async function clearTestData() {
+            try {
+                await chrome.storage.local.clear();
+                document.getElementById('status-output').innerHTML = 
+                    '<div style="color: #ff9800;">⚠️ All test data cleared</div>';
+                log('🗑️ All test data cleared');
+            } catch (error) {
+                log(`❌ Failed to clear test data: ${error.message}`);
+            }
+        }
+
+        function checkTooltipFields(tooltipElement) {
+            const fieldsToCheck = [
+                { id: 'field-shortInterest', selector: '.shi-short-interest', name: 'Short Interest' },
+                { id: 'field-shortInterestRatio', selector: '.shi-short-interest-ratio', name: 'Short Interest Ratio' },
+                { id: 'field-shortInterestPercentFloat', selector: '.shi-short-interest-percent-float', name: 'Short Interest % Float' },
+                { id: 'field-costToBorrow', selector: '.shi-cost-to-borrow', name: 'Cost To Borrow' },
+                { id: 'field-shortSharesAvailable', selector: '.shi-short-shares-available', name: 'Short Shares Available' },
+                { id: 'field-finraExemptVolume', selector: '.shi-finra-exempt-volume', name: 'FINRA Exempt Volume' },
+                { id: 'field-failureToDeliver', selector: '.shi-failure-to-deliver', name: 'Failure To Deliver' },
+                { id: 'field-lastDataUpdate', selector: '.shi-last-data-update', name: 'Last Data Update' }
+            ];
+
+            fieldsToCheck.forEach(({ id, selector, name }) => {
+                const element = tooltipElement.querySelector(selector);
+                const checkDiv = document.getElementById(id);
+                
+                if (element) {
+                    const value = element.textContent.trim();
+                    if (value && value !== '—' && value !== 'n/a') {
+                        checkDiv.className = 'field-check found';
+                        checkDiv.textContent = `${name}: "${value}" ✅`;
+                        log(`✅ ${name}: "${value}"`);
+                    } else {
+                        checkDiv.className = 'field-check missing';
+                        checkDiv.textContent = `${name}: "${value}" ❌`;
+                        log(`❌ ${name}: "${value}"`);
+                    }
+                } else {
+                    checkDiv.className = 'field-check missing';
+                    checkDiv.textContent = `${name}: Element not found ❌`;
+                    log(`❌ ${name}: Element not found`);
+                }
+            });
+        }
+
+        function monitorTooltips() {
+            if (isMonitoring) {
+                log('⚠️ Already monitoring tooltips');
+                return;
+            }
+
+            log('👀 Starting tooltip monitoring...');
+            isMonitoring = true;
+
+            tooltipObserver = new MutationObserver((mutations) => {
+                mutations.forEach((mutation) => {
+                    mutation.addedNodes.forEach((node) => {
+                        if (node.nodeType === 1 && node.classList?.contains('shi-tooltip')) {
+                            log('🎯 Tooltip detected in DOM!');
+                            
+                            // Wait a moment for data to populate
+                            setTimeout(() => {
+                                checkTooltipFields(node);
+                            }, 100);
+                        }
+                    });
+                });
+            });
+
+            tooltipObserver.observe(document.body, {
+                childList: true,
+                subtree: true
+            });
+
+            log('✅ Tooltip monitoring active - hover over ticker symbols now');
+        }
+
+        // Auto-start monitoring and check status on load
+        window.addEventListener('load', () => {
+            setTimeout(() => {
+                log('🚀 Test page loaded');
+                checkExtensionStatus();
+                monitorTooltips();
+            }, 500);
+        });
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            if (tooltipObserver) {
+                tooltipObserver.disconnect();
+            }
+        });
+    </script>
+</body>
+</html>

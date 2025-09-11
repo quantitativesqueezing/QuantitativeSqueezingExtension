@@ -46,22 +46,31 @@ function ensureTooltip() {
       </div>
     </div>
     <div class="shi-body">
-      <div class="shi-row"><span>Free Float</span><span class="shi-float">—</span></div>
-      <div class="shi-row"><span>Shares Outstanding</span><span class="shi-shares-outstanding">—</span></div>
-      <div class="shi-row"><span>Estimated Cash</span><span class="shi-cash">—</span></div>
-      <div class="shi-row"><span>Market Cap</span><span class="shi-market-cap">—</span></div>
-      <div class="shi-row"><span>Enterprise Value</span><span class="shi-enterprise-value">—</span></div>
-      <div class="shi-short-info">
-        <div class="shi-row"><span>Short Interest</span><span class="shi-short-interest">—</span></div>
-        <div class="shi-row"><span>Cost To Borrow</span><span class="shi-cost-to-borrow">—</span></div>
-        <div class="shi-row"><span>Failure To Deliver</span><span class="shi-failure-to-deliver">—</span></div>
-        <div class="shi-row"><span>Short Shares Available</span><span class="shi-short-shares-available">—</span></div>
-        <div class="shi-row"><span>Short-Exempt Volume</span><span class="shi-short-exempt-volume">—</span></div>
+      <div class="shi-section shi-float-info">
+        <div class="shi-row"><span>Free Float</span><span class="shi-float">—</span></div>
+        <div class="shi-row"><span>Shares Outstanding</span><span class="shi-shares-outstanding">—</span></div>
       </div>
-      <div class="shi-company-info">
+      <div class="shi-section shi-financial-info">
+        <div class="shi-row"><span>Estimated Cash</span><span class="shi-cash">—</span></div>
+        <div class="shi-row"><span>Market Cap</span><span class="shi-market-cap">—</span></div>
+        <div class="shi-row"><span>Enterprise Value</span><span class="shi-enterprise-value">—</span></div>
+      </div>
+      <div class="shi-section shi-short-info">
+        <div class="shi-row"><span>Short Interest</span><span class="shi-short-interest">—</span></div>
+        <div class="shi-row"><span>Short Interest Ratio</span><span class="shi-short-interest-ratio">—</span></div>
+        <div class="shi-row"><span>Short Interest % Float</span><span class="shi-short-interest-percent-float">—</span></div>
+        <div class="shi-row"><span>Cost To Borrow</span><span class="shi-cost-to-borrow">—</span></div>
+        <div class="shi-row"><span>Short Shares Available</span><span class="shi-short-shares-available">—</span></div>
+        <div class="shi-row"><span>FINRA Exempt Volume</span><span class="shi-finra-exempt-volume">—</span></div>
+        <div class="shi-row"><span>Failure To Deliver</span><span class="shi-failure-to-deliver">—</span></div>
+      </div>
+      <div class="shi-section shi-company-info">
         <div class="shi-row"><span>Sector</span><span class="shi-sector">—</span></div>
         <div class="shi-row"><span>Industry</span><span class="shi-industry">—</span></div>
         <div class="shi-row"><span>Country</span><span class="shi-country">—</span></div>
+      </div>
+      <div class="shi-section shi-last-update">
+        <div class="shi-row"><span>Last Update</span><span class="shi-last-data-update">—</span></div>
       </div>
     </div>
     <div class="shi-footer">
@@ -106,13 +115,16 @@ function showLoading(symbol, x, y) {
   safeSetText('.shi-market-cap', '—');
   safeSetText('.shi-enterprise-value', '—');
   safeSetText('.shi-short-interest', '—');
+  safeSetText('.shi-short-interest-ratio', '—');
+  safeSetText('.shi-short-interest-percent-float', '—');
   safeSetText('.shi-cost-to-borrow', '—');
-  safeSetText('.shi-failure-to-deliver', '—');
   safeSetText('.shi-short-shares-available', '—');
-  safeSetText('.shi-short-exempt-volume', '—');
+  safeSetText('.shi-finra-exempt-volume', '—');
+  safeSetText('.shi-failure-to-deliver', '—');
   safeSetText('.shi-sector', '—');
   safeSetText('.shi-industry', '—');
   safeSetText('.shi-country', '—');
+  safeSetText('.shi-last-data-update', '—');
   
   // Clear price changes
   safeSetText('.shi-regular-change', '');
@@ -126,9 +138,21 @@ function showData(symbol, x, y, data) {
   const el = ensureTooltip();
   clearTimeout(hideTimeout);
   
-  console.log('📊 showData received:', data);
+  console.log('📊 showData received for', symbol, ':', data);
   console.log('📊 Tooltip element:', el);
-  console.log('📊 Tooltip HTML:', el.innerHTML.substring(0, 200) + '...');
+  console.log('🔍 Data type check:', typeof data, 'Is object:', typeof data === 'object');
+  
+  // Debug specific field values being set
+  const fieldsToCheck = [
+    'shortInterest', 'shortInterestRatio', 'shortInterestPercentFloat',
+    'costToBorrow', 'shortSharesAvailable', 'finraExemptVolume', 'failureToDeliver'
+  ];
+  
+  console.log('🎯 Field values being set:');
+  fieldsToCheck.forEach(field => {
+    const value = data?.[field];
+    console.log(`   ${field}: "${value}" (type: ${typeof value})`);
+  });
 
   // Helper function to safely set text content
   function safeSetText(selector, value) {
@@ -157,15 +181,20 @@ function showData(symbol, x, y, data) {
   
   // Short interest information (from Fintel)
   safeSetText('.shi-short-interest', data?.shortInterest ?? 'n/a');
+  safeSetText('.shi-short-interest-ratio', data?.shortInterestRatio ?? 'n/a');
+  safeSetText('.shi-short-interest-percent-float', data?.shortInterestPercentFloat ?? 'n/a');
   safeSetText('.shi-cost-to-borrow', data?.costToBorrow ?? 'n/a');
-  safeSetText('.shi-failure-to-deliver', data?.failureToDeliver ?? 'n/a');
   safeSetText('.shi-short-shares-available', data?.shortSharesAvailable ?? 'n/a');
-  safeSetText('.shi-short-exempt-volume', data?.shortExemptVolume ?? 'n/a');
+  safeSetText('.shi-finra-exempt-volume', data?.finraExemptVolume ?? 'n/a');
+  safeSetText('.shi-failure-to-deliver', data?.failureToDeliver ?? 'n/a');
   
   // Company information
   safeSetText('.shi-sector', data?.sector ?? 'n/a');
   safeSetText('.shi-industry', data?.industry ?? 'n/a');
   safeSetText('.shi-country', data?.country ?? 'n/a');
+  
+  // Last update information
+  safeSetText('.shi-last-data-update', data?.lastDataUpdate ?? 'n/a');
   
   // Price changes with original styles
   const regularChangeEl = el.querySelector('.shi-regular-change');
@@ -206,11 +235,22 @@ function hideTooltip() {
 }
 
 async function fetchPack(symbol) {
-  console.log('fetchPack() START - using stored data');
+  console.log('📦 fetchPack() START - using stored data for:', symbol);
   const key = symbol.toUpperCase();
   
   // Get stored data from extension storage
   const storedData = await getStoredTickerData(key);
+  
+  if (!storedData) {
+    console.log(`❌ No stored data available for ${key}, returning default pack`);
+    return {
+      fetchedAt: Date.now(),
+      float: 'n/a', shortInterest: 'n/a', costToBorrow: 'n/a', 
+      failureToDeliver: 'n/a', shortInterestRatio: 'n/a',
+      shortInterestPercentFloat: 'n/a', shortSharesAvailable: 'n/a',
+      finraExemptVolume: 'n/a', lastDataUpdate: 'n/a'
+    };
+  }
   
   const now = Date.now();
   const pack = {
@@ -220,17 +260,29 @@ async function fetchPack(symbol) {
     estimatedCash: storedData?.estimatedCash ? `$${storedData.estimatedCash}M` : 'n/a',
     marketCap: storedData?.marketCap || 'n/a',
     enterpriseValue: storedData?.enterpriseValue || 'n/a',
+    // Enhanced Fintel.io fields
     shortInterest: storedData?.shortInterest || 'n/a',
+    shortInterestRatio: storedData?.shortInterestRatio || 'n/a',
+    shortInterestPercentFloat: storedData?.shortInterestPercentFloat || 'n/a',
     costToBorrow: storedData?.costToBorrow || 'n/a',
-    failureToDeliver: storedData?.failureToDeliver || 'n/a',
     shortSharesAvailable: storedData?.shortSharesAvailable || 'n/a',
-    shortExemptVolume: storedData?.shortExemptVolume || 'n/a',
+    finraExemptVolume: storedData?.finraExemptVolume || 'n/a',
+    failureToDeliver: storedData?.failureToDeliver || 'n/a',
+    lastDataUpdate: storedData?.lastDataUpdate || 'n/a',
+    // Company information
     sector: storedData?.sector || 'n/a',
     industry: storedData?.industry || 'n/a',
     country: storedData?.country || 'n/a',
+    // Price changes
     regularMarketChange: storedData?.regularMarketChange || null,
     extendedMarketChange: storedData?.extendedMarketChange || null
   };
+
+  console.log(`📦 fetchPack() RESULT for ${key}:`, pack);
+  console.log(`🔍 Key mappings check:`);
+  console.log(`   storedData.shortInterest: "${storedData.shortInterest}" → pack.shortInterest: "${pack.shortInterest}"`);
+  console.log(`   storedData.costToBorrow: "${storedData.costToBorrow}" → pack.costToBorrow: "${pack.costToBorrow}"`);
+  console.log(`   storedData.shortInterestRatio: "${storedData.shortInterestRatio}" → pack.shortInterestRatio: "${pack.shortInterestRatio}"`);
 
   return pack;
 }
@@ -247,6 +299,20 @@ async function getStoredTickerData(ticker) {
     
     if (data) {
       console.log(`💾 Found stored data for ${ticker}:`, data);
+      console.log(`🔍 Available fields in stored data:`, Object.keys(data));
+      
+      // Debug specific fintel fields
+      const fintelFields = [
+        'shortInterest', 'shortInterestRatio', 'shortInterestPercentFloat',
+        'costToBorrow', 'shortSharesAvailable', 'finraExemptVolume', 
+        'failureToDeliver', 'lastDataUpdate'
+      ];
+      
+      console.log(`🎯 Fintel fields status:`);
+      fintelFields.forEach(field => {
+        console.log(`   ${field}: ${data[field] || 'MISSING'}`);
+      });
+      
       return data;
     } else {
       console.log(`❌ No stored data found for ${ticker}`);

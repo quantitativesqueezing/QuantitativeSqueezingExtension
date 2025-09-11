@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Enhanced Tooltip Display</title>
+    <link rel="stylesheet" href="css/tooltip.css">
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 20px; 
+            line-height: 1.6;
+        }
+        .test-section { 
+            margin: 20px 0; 
+            padding: 15px; 
+            background: #f5f5f5; 
+            border-radius: 5px; 
+        }
+        .ticker-test {
+            background: yellow;
+            padding: 5px 10px;
+            margin: 10px;
+            cursor: pointer;
+            display: inline-block;
+            border-radius: 3px;
+        }
+        .log { 
+            background: #333; 
+            color: #fff; 
+            padding: 10px; 
+            border-radius: 5px; 
+            margin: 10px 0; 
+            height: 150px; 
+            overflow-y: auto; 
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .instructions {
+            background: #e3f2fd;
+            padding: 15px;
+            border-radius: 5px;
+            border-left: 4px solid #2196f3;
+        }
+        .storage-viewer {
+            background: #f9f9f9;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 11px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Enhanced Tooltip Display Test</h1>
+    
+    <div class="instructions">
+        <h3>Instructions:</h3>
+        <ol>
+            <li>Ensure the Chrome extension is loaded</li>
+            <li>Visit a fintel.io page like: <code>https://fintel.io/ss/us/OPAD</code></li>
+            <li>Let the extension extract data (check console logs)</li>
+            <li>Come back to this page and hover over the test tickers below</li>
+            <li>Check if the enhanced tooltip shows all the new fintel.io fields</li>
+        </ol>
+    </div>
+
+    <div class="test-section">
+        <h2>Test Ticker Symbols</h2>
+        <p>Hover over these ticker symbols to test the enhanced tooltip:</p>
+        
+        <div class="ticker-test">$OPAD</div>
+        <div class="ticker-test">$TSLA</div>
+        <div class="ticker-test">$AAPL</div>
+        <div class="ticker-test">$GME</div>
+        <div class="ticker-test">$AMC</div>
+    </div>
+
+    <div class="test-section">
+        <h2>Extension Storage Viewer</h2>
+        <button onclick="viewStoredData()">View Stored Ticker Data</button>
+        <button onclick="clearLog()">Clear Log</button>
+        <div id="storage-data" class="storage-viewer"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>Test Console</h2>
+        <div id="log" class="log"></div>
+    </div>
+
+    <script>
+        function log(message) {
+            const logDiv = document.getElementById('log');
+            const timestamp = new Date().toLocaleTimeString();
+            logDiv.innerHTML += `[${timestamp}] ${message}<br>`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+            console.log(message);
+        }
+
+        function clearLog() {
+            document.getElementById('log').innerHTML = '';
+            document.getElementById('storage-data').innerHTML = '';
+        }
+
+        async function viewStoredData() {
+            try {
+                log('🔍 Checking extension storage for ticker data...');
+                
+                // Get all storage data
+                const allData = await chrome.storage.local.get(null);
+                const storageDiv = document.getElementById('storage-data');
+                
+                // Find ticker data
+                const tickerData = {};
+                Object.keys(allData).forEach(key => {
+                    if (key.startsWith('ticker_')) {
+                        const ticker = key.replace('ticker_', '');
+                        tickerData[ticker] = allData[key];
+                    }
+                });
+                
+                if (Object.keys(tickerData).length === 0) {
+                    storageDiv.innerHTML = '<em>No ticker data found in storage. Visit some fintel.io pages first.</em>';
+                    log('❌ No ticker data found in storage');
+                    return;
+                }
+                
+                log(`✅ Found data for ${Object.keys(tickerData).length} tickers`);
+                
+                // Display ticker data
+                let html = '<h4>Stored Ticker Data:</h4>';
+                Object.entries(tickerData).forEach(([ticker, data]) => {
+                    html += `<div style="margin: 10px 0; padding: 10px; background: white; border-radius: 3px;">`;
+                    html += `<strong>$${ticker}</strong><br>`;
+                    
+                    // Show key fintel.io fields
+                    const fieldsToShow = [
+                        'shortInterest',
+                        'shortInterestRatio', 
+                        'shortInterestPercentFloat',
+                        'costToBorrow',
+                        'shortSharesAvailable',
+                        'finraExemptVolume',
+                        'failureToDeliver',
+                        'lastDataUpdate',
+                        'latestFloat'
+                    ];
+                    
+                    fieldsToShow.forEach(field => {
+                        if (data[field] && data[field] !== 'n/a') {
+                            html += `${field}: ${data[field]}<br>`;
+                        }
+                    });
+                    
+                    if (data.lastUpdated) {
+                        html += `<em>Last updated: ${new Date(data.lastUpdated).toLocaleString()}</em>`;
+                    }
+                    
+                    html += `</div>`;
+                });
+                
+                storageDiv.innerHTML = html;
+                
+            } catch (error) {
+                log(`❌ Error accessing storage: ${error.message}`);
+                document.getElementById('storage-data').innerHTML = `<em>Error: ${error.message}</em>`;
+            }
+        }
+
+        // Monitor tooltip creation and updates
+        const observer = new MutationObserver((mutations) => {
+            mutations.forEach((mutation) => {
+                mutation.addedNodes.forEach((node) => {
+                    if (node.nodeType === 1 && node.classList?.contains('shi-tooltip')) {
+                        log('🎯 Tooltip created in DOM');
+                        
+                        // Check if new fields are present
+                        const newFields = [
+                            '.shi-short-interest-ratio',
+                            '.shi-short-interest-percent-float', 
+                            '.shi-finra-exempt-volume',
+                            '.shi-last-data-update'
+                        ];
+                        
+                        newFields.forEach(selector => {
+                            const element = node.querySelector(selector);
+                            if (element) {
+                                log(`✅ Found new field: ${selector}`);
+                            } else {
+                                log(`❌ Missing field: ${selector}`);
+                            }
+                        });
+                    }
+                });
+            });
+        });
+
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
+
+        // Auto-load storage data when page loads
+        window.addEventListener('load', () => {
+            setTimeout(() => {
+                log('🚀 Page loaded, checking for stored data...');
+                viewStoredData();
+            }, 1000);
+        });
+
+        log('🔧 Test page initialized - hover over ticker symbols to test tooltip');
+    </script>
+</body>
+</html>

@@ -150,14 +150,55 @@ async function fetchPack(symbol) {
   const storedResult = await chrome.storage.local.get(`ticker_${key}`);
   const storedData = storedResult[`ticker_${key}`];
   
+  console.log(`🔧 Service Worker: Retrieved stored data for ${key}:`, storedData);
+  if (storedData) {
+    console.log(`🎯 Service Worker: Available fintel fields:`, {
+      shortInterest: storedData.shortInterest,
+      shortInterestRatio: storedData.shortInterestRatio,
+      shortInterestPercentFloat: storedData.shortInterestPercentFloat,
+      costToBorrow: storedData.costToBorrow,
+      shortSharesAvailable: storedData.shortSharesAvailable,
+      finraExemptVolume: storedData.finraExemptVolume,
+      failureToDeliver: storedData.failureToDeliver,
+      lastDataUpdate: storedData.lastDataUpdate
+    });
+  }
+  
   const pack = {
     fetchedAt: storedData?.lastUpdated || now,
     float: valueOrNull(floatVal),
     shortInterest: valueOrNull(siVal),
     ctb: valueOrNull(ctbVal),
-    ftd: storedData?.estimatedCash ? `$${storedData.estimatedCash}M` : valueOrNull(ftdVal)
+    ftd: storedData?.estimatedCash ? `$${storedData.estimatedCash}M` : valueOrNull(ftdVal),
+    // Enhanced Fintel.io fields from stored data
+    shortInterestRatio: storedData?.shortInterestRatio || 'n/a',
+    shortInterestPercentFloat: storedData?.shortInterestPercentFloat || 'n/a',
+    costToBorrow: storedData?.costToBorrow || valueOrNull(ctbVal),
+    shortSharesAvailable: storedData?.shortSharesAvailable || 'n/a',
+    finraExemptVolume: storedData?.finraExemptVolume || 'n/a',
+    failureToDeliver: storedData?.failureToDeliver || valueOrNull(ftdVal),
+    lastDataUpdate: storedData?.lastDataUpdate || 'n/a',
+    // Additional fields from stored data
+    sharesOutstanding: storedData?.sharesOutstanding || 'n/a',
+    estimatedCash: storedData?.estimatedCash ? `$${storedData.estimatedCash}M` : 'n/a',
+    marketCap: storedData?.marketCap || 'n/a',
+    enterpriseValue: storedData?.enterpriseValue || 'n/a',
+    sector: storedData?.sector || 'n/a',
+    industry: storedData?.industry || 'n/a',
+    country: storedData?.country || 'n/a',
+    regularMarketChange: storedData?.regularMarketChange || null,
+    extendedMarketChange: storedData?.extendedMarketChange || null
   };
 
+  console.log(`📦 Service Worker: Final pack for ${key}:`, pack);
+  console.log(`🔍 Service Worker: Key fintel fields in pack:`, {
+    shortInterest: pack.shortInterest,
+    shortInterestRatio: pack.shortInterestRatio,
+    shortInterestPercentFloat: pack.shortInterestPercentFloat,
+    costToBorrow: pack.costToBorrow,
+    finraExemptVolume: pack.finraExemptVolume
+  });
+  
   cache.set(key, pack);
   return pack;
 }
