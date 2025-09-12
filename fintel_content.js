@@ -53,9 +53,9 @@ async function extractFintelData(ticker) {
     if (fintelData && Object.keys(fintelData).length > 0) {
       console.log('📊 Parsed Fintel data:', fintelData);
       
-      // Add green text highlighting for verified data (with slight delay to ensure DOM is ready)
+      // Add checkmark icons for verified data (with slight delay to ensure DOM is ready)
       setTimeout(() => {
-        addFintelGreenTextHighlighting(ticker, fintelData);
+        addFintelVerificationIcons(ticker, fintelData);
       }, 500);
       
       // Check if data has changed before storing
@@ -473,11 +473,11 @@ function cleanValue(value) {
 }
 
 /**
- * Add green text highlighting to matching Fintel data elements
+ * Add verification checkmark icons next to matching Fintel data elements
  * @param {string} ticker - Stock ticker
  * @param {Object} currentData - Currently extracted Fintel data
  */
-async function addFintelGreenTextHighlighting(ticker, currentData) {
+async function addFintelVerificationIcons(ticker, currentData) {
   try {
     // Check if chrome.storage is available
     if (!chrome || !chrome.storage) {
@@ -489,10 +489,10 @@ async function addFintelGreenTextHighlighting(ticker, currentData) {
     const result = await chrome.storage.local.get(`ticker_${ticker}`);
     const storedData = result[`ticker_${ticker}`];
     
-    // If no stored data, this is first time crawling - highlight all values
+    // If no stored data, this is first time crawling - show checkmarks for all values
     const isFirstTime = !storedData;
     
-    console.log(`🟢 Adding Fintel green text highlighting for ${ticker} (first time: ${isFirstTime})`);
+    console.log(`✅ Adding Fintel verification icons for ${ticker} (first time: ${isFirstTime})`);
     
     // Define fields to check and their comparison functions
     const fieldsToCheck = [
@@ -506,13 +506,13 @@ async function addFintelGreenTextHighlighting(ticker, currentData) {
       { field: 'finraExemptVolume', compareValue: true }
     ];
     
-    // Add green highlighting for each field
+    // Add checkmarks for each field
     fieldsToCheck.forEach(({ field, compareValue }) => {
       const currentValue = currentData[field];
       const storedValue = storedData?.[field];
       
       if (currentValue && (isFirstTime || (compareValue && storedValue === currentValue))) {
-        addFintelGreenTextToElement(document.body, field, currentValue);
+        addFintelCheckmarkToElement(document.body, field, currentValue);
       }
     });
     
@@ -525,25 +525,25 @@ async function addFintelGreenTextHighlighting(ticker, currentData) {
         
         if (isFirstTime || currentRows === storedRows) {
           const tableId = tableField.replace('Table', '').replace(/([A-Z])/g, '-$1').toLowerCase().replace(/^-/, '');
-          addGreenTextToTable(tableId);
+          addCheckmarkToTable(tableId);
         }
       }
     });
     
-    console.log(`🟢 Fintel green text highlighting added for ${ticker}`);
+    console.log(`✅ Fintel verification icons added for ${ticker}`);
     
   } catch (error) {
-    console.error('❌ Error adding Fintel green text highlighting:', error);
+    console.error('❌ Error adding Fintel verification icons:', error);
   }
 }
 
 /**
- * Add green text highlighting to Fintel data elements
+ * Add a checkmark icon next to Fintel data elements
  * @param {Element} container - Container element to search within
  * @param {string} field - Field name (shortInterest, costToBorrow, etc.)
  * @param {string} value - Current value to match
  */
-function addFintelGreenTextToElement(container, field, value) {
+function addFintelCheckmarkToElement(container, field, value) {
   try {
     // Define search patterns for different Fintel fields
     const searchPatterns = {
@@ -605,34 +605,43 @@ function addFintelGreenTextToElement(container, field, value) {
         if (pattern.test(text)) {
           const parent = node.parentElement;
           
-          // Check if green styling already exists for this field
-          if (parent && !parent.hasAttribute(`data-qse-green-${field}`)) {
-            // Apply green text styling to the parent element
-            parent.style.color = '#22c55e';
-            parent.style.fontWeight = 'bold';
-            parent.style.textShadow = '0 1px 2px rgba(34, 197, 94, 0.3)';
-            parent.setAttribute(`data-qse-green-${field}`, 'true');
-            parent.title = `${field} matches extension storage: ${value}`;
+          // Check if checkmark already exists for this field
+          if (parent && !parent.querySelector(`.qse-verified-icon[data-field="${field}"]`)) {
+            const checkmark = document.createElement('span');
+            checkmark.className = 'qse-verified-icon';
+            checkmark.setAttribute('data-field', field);
+            checkmark.innerHTML = '✓';
+            checkmark.title = `${field} matches extension storage: ${value}`;
+            checkmark.style.color = '#22c55e';
+            checkmark.style.marginLeft = '6px';
+            checkmark.style.fontWeight = 'bold';
             
-            console.log(`🟢 Added Fintel green text for ${field}: ${value} to element: "${text.trim()}"`);
-            return; // Exit after applying green styling
-          } else if (parent?.hasAttribute(`data-qse-green-${field}`)) {
-            console.log(`⚠️ Fintel green text already applied for ${field}`);
+            // Insert checkmark after the text node or at end of parent
+            if (node.nextSibling) {
+              parent.insertBefore(checkmark, node.nextSibling);
+            } else {
+              parent.appendChild(checkmark);
+            }
+            
+            console.log(`✅ Added Fintel checkmark for ${field}: ${value} next to: "${text.trim()}"`);
+            return; // Exit after adding checkmark
+          } else if (parent?.querySelector(`.qse-verified-icon[data-field="${field}"]`)) {
+            console.log(`⚠️ Fintel checkmark already exists for ${field}`);
           }
         }
       }
     }
     
   } catch (error) {
-    console.error(`❌ Error adding Fintel green text for ${field}:`, error);
+    console.error(`❌ Error adding Fintel checkmark for ${field}:`, error);
   }
 }
 
 /**
- * Add green text highlighting to table headers and cells
+ * Add checkmark icon to table headers
  * @param {string} tableType - Type of table (short-shares-availability, etc.)
  */
-function addGreenTextToTable(tableType) {
+function addCheckmarkToTable(tableType) {
   try {
     const tableSelectors = [
       `#${tableType}-table`,
@@ -644,39 +653,23 @@ function addGreenTextToTable(tableType) {
     for (const selector of tableSelectors) {
       const table = document.querySelector(selector);
       if (table) {
-        // Check if green styling already applied
-        if (!table.hasAttribute('data-qse-green-table')) {
-          // Apply green styling to the entire table
-          table.style.borderColor = '#22c55e';
-          table.style.boxShadow = '0 2px 8px rgba(34, 197, 94, 0.2)';
-          table.setAttribute('data-qse-green-table', 'true');
-          table.title = 'Table data matches extension storage';
+        const header = table.querySelector('th, thead tr td');
+        if (header && !header.querySelector('.qse-verified-icon')) {
+          const checkmark = document.createElement('span');
+          checkmark.className = 'qse-verified-icon';
+          checkmark.innerHTML = '✓';
+          checkmark.title = 'Table data matches extension storage';
+          checkmark.style.marginLeft = '8px';
           
-          // Style table headers
-          const headers = table.querySelectorAll('th, thead tr td');
-          headers.forEach(header => {
-            header.style.color = '#22c55e';
-            header.style.fontWeight = 'bold';
-            header.style.borderBottomColor = '#22c55e';
-          });
-          
-          // Style first column (usually contains labels/dates)
-          const firstColumnCells = table.querySelectorAll('tr td:first-child');
-          firstColumnCells.forEach(cell => {
-            cell.style.color = '#16a34a';
-            cell.style.fontWeight = '600';
-          });
-          
-          console.log(`🟢 Added green text styling to ${tableType} table`);
+          header.appendChild(checkmark);
+          console.log(`✅ Added checkmark to ${tableType} table`);
           break;
-        } else {
-          console.log(`⚠️ Green text styling already applied to ${tableType} table`);
         }
       }
     }
     
   } catch (error) {
-    console.error(`❌ Error adding green text to ${tableType} table:`, error);
+    console.error(`❌ Error adding checkmark to ${tableType} table:`, error);
   }
 }
 
