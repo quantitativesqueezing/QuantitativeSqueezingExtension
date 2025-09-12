@@ -30,11 +30,13 @@
     {
       "matches": ["https://dilutiontracker.com/*"],
       "js": ["dilutiontracker_content.js"],
+      "css": ["css/tooltip.css"],
       "run_at": "document_idle"
     },
     {
       "matches": ["https://fintel.io/*"],
       "js": ["fintel_content.js"],
+      "css": ["css/tooltip.css"],
       "run_at": "document_idle"
     }
   ],

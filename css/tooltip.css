@@ -93,3 +93,17 @@
   font-size: 11px;
   color: #6b7280;
 }
+
+.qse-verified-icon {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin-left: 6px;
+  color: #22c55e;
+  font-size: 12px;
+  font-weight: bold;
+  line-height: 1;
+  vertical-align: middle;
+  position: relative;
+  top: -1px;
+}

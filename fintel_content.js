@@ -53,6 +53,11 @@ async function extractFintelData(ticker) {
     if (fintelData && Object.keys(fintelData).length > 0) {
       console.log('📊 Parsed Fintel data:', fintelData);
       
+      // Add checkmark icons for verified data (with slight delay to ensure DOM is ready)
+      setTimeout(() => {
+        addFintelVerificationIcons(ticker, fintelData);
+      }, 500);
+      
       // Check if data has changed before storing
       await storeFintelDataIfChanged(ticker, fintelData);
     } else {
@@ -109,14 +114,14 @@ function extractBasicMetrics(text) {
   
   // Enhanced patterns for all required fields
   const patterns = [
-    // Short Interest patterns - more comprehensive
+    // Short Interest patterns - focus on share counts, not percentages
     { 
       field: 'shortInterest', 
       patterns: [
-        /Short\s+Interest[:\s]*([0-9.,]+%)/i,
-        /Short\s+Interest\s+%[:\s]*([0-9.,]+%?)/i,
-        /Short\s+Interest[:\s]*([0-9.,]+)\s*%/i,
-        /Short\s+Interest[:\s]*([0-9.,]+[KMB]?\s*shares)/i
+        /Short\s+Interest[:\s]*([0-9.,]+[KMB]?\s*shares)/i,
+        /Short\s+Interest\s+Shares[:\s]*([0-9.,]+[KMB]?)/i,
+        /Shares\s+Short[:\s]*([0-9.,]+[KMB]?)/i,
+        /Short\s+Interest[:\s]*([0-9.,]+[KMB])(?!\s*%)/i
       ]
     },
     
@@ -468,12 +473,219 @@ function cleanValue(value) {
 }
 
 /**
+ * Add verification checkmark icons next to matching Fintel data elements
+ * @param {string} ticker - Stock ticker
+ * @param {Object} currentData - Currently extracted Fintel data
+ */
+async function addFintelVerificationIcons(ticker, currentData) {
+  try {
+    // Check if chrome.storage is available
+    if (!chrome || !chrome.storage) {
+      console.error('❌ Chrome storage API not available');
+      return;
+    }
+
+    // Get existing stored data
+    const result = await chrome.storage.local.get(`ticker_${ticker}`);
+    const storedData = result[`ticker_${ticker}`];
+    
+    // If no stored data, this is first time crawling - show checkmarks for all values
+    const isFirstTime = !storedData;
+    
+    console.log(`✅ Adding Fintel verification icons for ${ticker} (first time: ${isFirstTime})`);
+    
+    // Define fields to check and their comparison functions
+    const fieldsToCheck = [
+      { field: 'shortInterest', compareValue: true },
+      { field: 'shortInterestRatio', compareValue: true },
+      { field: 'shortInterestPercentFloat', compareValue: true },
+      { field: 'costToBorrow', compareValue: true },
+      { field: 'failureToDeliver', compareValue: true },
+      { field: 'shortSharesAvailable', compareValue: true },
+      { field: 'shortExemptVolume', compareValue: true },
+      { field: 'finraExemptVolume', compareValue: true }
+    ];
+    
+    // Add checkmarks for each field
+    fieldsToCheck.forEach(({ field, compareValue }) => {
+      const currentValue = currentData[field];
+      const storedValue = storedData?.[field];
+      
+      if (currentValue && (isFirstTime || (compareValue && storedValue === currentValue))) {
+        addFintelCheckmarkToElement(document.body, field, currentValue);
+      }
+    });
+    
+    // Handle table data separately
+    const tableFields = ['shortSharesAvailabilityTable', 'shortBorrowRateTable', 'failsToDeliverTable'];
+    tableFields.forEach(tableField => {
+      if (currentData[tableField] && Array.isArray(currentData[tableField])) {
+        const currentRows = currentData[tableField].length;
+        const storedRows = storedData?.[tableField]?.length || 0;
+        
+        if (isFirstTime || currentRows === storedRows) {
+          const tableId = tableField.replace('Table', '').replace(/([A-Z])/g, '-$1').toLowerCase().replace(/^-/, '');
+          addCheckmarkToTable(tableId);
+        }
+      }
+    });
+    
+    console.log(`✅ Fintel verification icons added for ${ticker}`);
+    
+  } catch (error) {
+    console.error('❌ Error adding Fintel verification icons:', error);
+  }
+}
+
+/**
+ * Add a checkmark icon next to Fintel data elements
+ * @param {Element} container - Container element to search within
+ * @param {string} field - Field name (shortInterest, costToBorrow, etc.)
+ * @param {string} value - Current value to match
+ */
+function addFintelCheckmarkToElement(container, field, value) {
+  try {
+    // Define search patterns for different Fintel fields
+    const searchPatterns = {
+      shortInterest: [
+        /Short\s+Interest[:\s]*([0-9.,]+[KMB]?\s*shares)/i,
+        /Short\s+Interest\s+Shares[:\s]*([0-9.,]+[KMB]?)/i,
+        /Shares\s+Short[:\s]*([0-9.,]+[KMB]?)/i,
+        /Short\s+Interest[:\s]*([0-9.,]+[KMB])(?!\s*%)/i
+      ],
+      shortInterestRatio: [
+        /Short\s+Interest\s+Ratio[:\s]*([0-9.,]+\s*days?)/i,
+        /Short\s+Ratio[:\s]*([0-9.,]+\s*days?)/i,
+        /Days\s+to\s+Cover[:\s]*([0-9.,]+\s*days?)/i
+      ],
+      shortInterestPercentFloat: [
+        /Short\s+Interest\s+%\s+Float[:\s]*([0-9.,]+%?)/i,
+        /Short\s+Interest\s+%\s+of\s+Float[:\s]*([0-9.,]+%?)/i
+      ],
+      costToBorrow: [
+        /Cost\s+to\s+Borrow[:\s]*([0-9.,]+%)/i,
+        /Borrow\s+Rate[:\s]*([0-9.,]+%)/i,
+        /CTB[:\s]*([0-9.,]+%)/i
+      ],
+      failureToDeliver: [
+        /Failure\s+to\s+Deliver[:\s]*([0-9.,]+[KMB]?)/i,
+        /Fails?\s+to\s+Deliver[:\s]*([0-9.,]+[KMB]?)/i,
+        /FTD[:\s]*([0-9.,]+[KMB]?)/i
+      ],
+      shortSharesAvailable: [
+        /Short\s+Shares\s+Available[:\s]*([0-9.,]+[KMB]?)/i,
+        /Shares\s+Available[:\s]*([0-9.,]+[KMB]?)/i
+      ],
+      shortExemptVolume: [
+        /Short[- ]Exempt\s+Volume[:\s]*([0-9.,]+[KMB]?)/i,
+        /Exempt\s+Volume[:\s]*([0-9.,]+[KMB]?)/i
+      ],
+      finraExemptVolume: [
+        /FINRA\s+Exempt\s+Volume[:\s]*([0-9.,]+[KMB]?)/i,
+        /Regulation\s+SHO\s+Exempt[:\s]*([0-9.,]+[KMB]?)/i
+      ]
+    };
+    
+    const patterns = searchPatterns[field];
+    if (!patterns) return;
+    
+    // Find text nodes that contain any of the patterns
+    const walker = document.createTreeWalker(
+      container,
+      NodeFilter.SHOW_TEXT,
+      null,
+      false
+    );
+    
+    let node;
+    while (node = walker.nextNode()) {
+      const text = node.nodeValue;
+      
+      for (const pattern of patterns) {
+        if (pattern.test(text)) {
+          const parent = node.parentElement;
+          
+          // Check if checkmark already exists for this field
+          if (parent && !parent.querySelector(`.qse-verified-icon[data-field="${field}"]`)) {
+            const checkmark = document.createElement('span');
+            checkmark.className = 'qse-verified-icon';
+            checkmark.setAttribute('data-field', field);
+            checkmark.innerHTML = '✓';
+            checkmark.title = `${field} matches extension storage: ${value}`;
+            checkmark.style.color = '#22c55e';
+            checkmark.style.marginLeft = '6px';
+            checkmark.style.fontWeight = 'bold';
+            
+            // Insert checkmark after the text node or at end of parent
+            if (node.nextSibling) {
+              parent.insertBefore(checkmark, node.nextSibling);
+            } else {
+              parent.appendChild(checkmark);
+            }
+            
+            console.log(`✅ Added Fintel checkmark for ${field}: ${value} next to: "${text.trim()}"`);
+            return; // Exit after adding checkmark
+          } else if (parent?.querySelector(`.qse-verified-icon[data-field="${field}"]`)) {
+            console.log(`⚠️ Fintel checkmark already exists for ${field}`);
+          }
+        }
+      }
+    }
+    
+  } catch (error) {
+    console.error(`❌ Error adding Fintel checkmark for ${field}:`, error);
+  }
+}
+
+/**
+ * Add checkmark icon to table headers
+ * @param {string} tableType - Type of table (short-shares-availability, etc.)
+ */
+function addCheckmarkToTable(tableType) {
+  try {
+    const tableSelectors = [
+      `#${tableType}-table`,
+      `#table-${tableType}`,
+      `table[class*="${tableType}"]`,
+      `table[id*="${tableType}"]`
+    ];
+    
+    for (const selector of tableSelectors) {
+      const table = document.querySelector(selector);
+      if (table) {
+        const header = table.querySelector('th, thead tr td');
+        if (header && !header.querySelector('.qse-verified-icon')) {
+          const checkmark = document.createElement('span');
+          checkmark.className = 'qse-verified-icon';
+          checkmark.innerHTML = '✓';
+          checkmark.title = 'Table data matches extension storage';
+          checkmark.style.marginLeft = '8px';
+          
+          header.appendChild(checkmark);
+          console.log(`✅ Added checkmark to ${tableType} table`);
+          break;
+        }
+      }
+    }
+    
+  } catch (error) {
+    console.error(`❌ Error adding checkmark to ${tableType} table:`, error);
+  }
+}
+
+/**
  * Store Fintel data only if it has changed, merging with existing ticker data
  * @param {string} ticker - Stock ticker
  * @param {Object} newFintelData - New Fintel data
  */
 async function storeFintelDataIfChanged(ticker, newFintelData) {
   try {
+    // Check if chrome.storage is available
+    if (!chrome || !chrome.storage) {
+      console.error('❌ Chrome storage API not available');
+      return;
+    }
+
     // Get existing ticker data
     const result = await chrome.storage.local.get(`ticker_${ticker}`);
     let existingData = result[`ticker_${ticker}`] || {};
