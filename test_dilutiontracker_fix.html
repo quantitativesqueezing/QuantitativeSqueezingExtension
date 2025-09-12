@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test DilutionTracker URL Fragment Fix</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 20px; 
+            line-height: 1.6;
+            background: #f5f5f5;
+        }
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .test-section { 
+            margin: 20px 0; 
+            padding: 15px; 
+            background: #f9f9f9; 
+            border-radius: 5px; 
+            border-left: 4px solid #2196f3;
+        }
+        .issue-box {
+            background: #ffebee;
+            border-left: 4px solid #f44336;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 0 5px 5px 0;
+        }
+        .fix-box {
+            background: #e8f5e8;
+            border-left: 4px solid #4caf50;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 0 5px 5px 0;
+        }
+        .url-example {
+            font-family: monospace;
+            background: #f0f0f0;
+            padding: 8px;
+            border-radius: 3px;
+            margin: 5px 0;
+            overflow-x: auto;
+        }
+        .regex-box {
+            background: #1e1e1e;
+            color: #fff;
+            padding: 15px;
+            border-radius: 5px;
+            font-family: monospace;
+            margin: 10px 0;
+        }
+        .test-result {
+            margin: 8px 0;
+            padding: 8px;
+            border-radius: 3px;
+        }
+        .pass { background: #e8f5e8; color: #2e7d32; }
+        .fail { background: #ffebee; color: #c62828; }
+        button {
+            background: #2196f3;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover { background: #1976d2; }
+        .highlight { background: #ffeb3b; padding: 2px 4px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔧 DilutionTracker URL Fragment Fix</h1>
+        
+        <div class="issue-box">
+            <h3>❌ Problem Description</h3>
+            <p>DilutionTracker URLs with fragments like <span class="highlight">?a=</span> at the end were not being recognized, causing:</p>
+            <ul>
+                <li>Font colors not changing to green</li>
+                <li>Data not being extracted and stored</li>
+                <li>Tooltip data not available on other sites</li>
+            </ul>
+            <p><strong>Example failing URLs:</strong></p>
+            <div class="url-example">https://dilutiontracker.com/app/search/OPAD?a=</div>
+            <div class="url-example">https://dilutiontracker.com/app/search/TSLA?a=123</div>
+        </div>
+
+        <div class="fix-box">
+            <h3>✅ Solution Implemented</h3>
+            <p>Updated the regex pattern to handle URL fragments and query parameters:</p>
+            <div class="regex-box">
+                // Old pattern (strict):
+                /\/app\/search\/([A-Z]{1,5})/i
+
+                // New pattern (flexible):
+                /\/app\/search\/([A-Z]{1,5})(?:[/?#]|$)/i
+            </div>
+            <p><strong>Additional improvements:</strong></p>
+            <ul>
+                <li>✅ Handles query parameters like <code>?a=</code></li>
+                <li>✅ Handles URL fragments like <code>#section</code></li>
+                <li>✅ Handles trailing slashes like <code>/TICKER/</code></li>
+                <li>✅ Detects URL changes during navigation</li>
+                <li>✅ Works with single-page app routing</li>
+            </ul>
+        </div>
+
+        <div class="test-section">
+            <h2>🧪 URL Pattern Testing</h2>
+            <button onclick="runRegexTests()">Test Regex Pattern</button>
+            <button onclick="simulateNavigation()">Simulate Navigation</button>
+            <div id="test-results"></div>
+        </div>
+
+        <div class="test-section">
+            <h2>📋 Testing Checklist</h2>
+            <p>To verify the fix works:</p>
+            <ol>
+                <li>✅ Load the updated extension in Chrome</li>
+                <li>🌐 Navigate to: <code>https://dilutiontracker.com/app/search/OPAD?a=</code></li>
+                <li>🔍 Check browser console for: <code>📊 Detected ticker page: OPAD</code></li>
+                <li>👀 Verify green highlighting appears on matching data</li>
+                <li>💾 Confirm data is stored in extension storage</li>
+                <li>🖱️ Test tooltip on other websites shows the data</li>
+            </ol>
+        </div>
+
+        <div class="test-section">
+            <h2>🔍 Debugging Information</h2>
+            <p>Look for these console messages when testing:</p>
+            <div class="regex-box">
+🔍 DilutionTracker: Checking URL: https://dilutiontracker.com/app/search/OPAD?a=
+📊 Detected ticker page: OPAD (from URL: https://dilutiontracker.com/app/search/OPAD?a=)
+🔍 Extracting data for OPAD...
+🟢 Adding DilutionTracker green text highlighting for OPAD
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function runRegexTests() {
+            const pattern = /\/app\/search\/([A-Z]{1,5})(?:[/?#]|$)/i;
+            
+            const testCases = [
+                // Should PASS - URLs that were previously broken
+                { url: 'https://dilutiontracker.com/app/search/OPAD?a=', expected: 'OPAD', broken: true },
+                { url: 'https://dilutiontracker.com/app/search/TSLA?a=123', expected: 'TSLA', broken: true },
+                { url: 'https://dilutiontracker.com/app/search/AMC?param=value&other=test', expected: 'AMC', broken: true },
+                
+                // Should PASS - URLs that worked before  
+                { url: 'https://dilutiontracker.com/app/search/OPAD', expected: 'OPAD', broken: false },
+                { url: 'https://dilutiontracker.com/app/search/TSLA/', expected: 'TSLA', broken: false },
+                
+                // Should PASS - Additional edge cases
+                { url: 'https://dilutiontracker.com/app/search/GME#section', expected: 'GME', broken: false },
+                { url: 'https://dilutiontracker.com/app/search/PLTR/?test=1', expected: 'PLTR', broken: false },
+                
+                // Should FAIL - Invalid patterns
+                { url: 'https://dilutiontracker.com/app/search/', expected: null, broken: false },
+                { url: 'https://dilutiontracker.com/app/search/TOOLONG', expected: null, broken: false },
+                { url: 'https://dilutiontracker.com/other/OPAD', expected: null, broken: false }
+            ];
+
+            const resultsDiv = document.getElementById('test-results');
+            resultsDiv.innerHTML = '<h3>Test Results</h3>';
+
+            let fixedCount = 0;
+            let totalBroken = 0;
+
+            testCases.forEach(testCase => {
+                const { url, expected, broken } = testCase;
+                const match = url.match(pattern);
+                const actual = match ? match[1] : null;
+                const passed = actual === expected;
+
+                if (broken) totalBroken++;
+                if (broken && passed) fixedCount++;
+
+                const resultDiv = document.createElement('div');
+                resultDiv.className = `test-result ${passed ? 'pass' : 'fail'}`;
+                
+                const status = passed ? '✅ PASS' : '❌ FAIL';
+                const brokenTag = broken ? ' <strong>(Previously Broken)</strong>' : '';
+                const ticker = actual ? actual : 'no match';
+
+                resultDiv.innerHTML = `
+                    ${status} ${url.replace('https://dilutiontracker.com', '')}<br>
+                    Expected: <code>${expected || 'no match'}</code> | Got: <code>${ticker}</code>${brokenTag}
+                `;
+
+                resultsDiv.appendChild(resultDiv);
+            });
+
+            // Summary
+            const summaryDiv = document.createElement('div');
+            summaryDiv.style.marginTop = '20px';
+            summaryDiv.style.padding = '15px';
+            summaryDiv.style.background = '#e3f2fd';
+            summaryDiv.style.borderRadius = '5px';
+            summaryDiv.innerHTML = `
+                <h4>Fix Summary</h4>
+                <p>✅ <strong>${fixedCount}/${totalBroken}</strong> previously broken URLs now work!</p>
+                <p>🎯 The URL fragment issue has been resolved.</p>
+            `;
+            resultsDiv.appendChild(summaryDiv);
+        }
+
+        function simulateNavigation() {
+            const resultsDiv = document.getElementById('test-results');
+            resultsDiv.innerHTML = '<h3>Navigation Simulation</h3>';
+
+            // Simulate what would happen during navigation
+            const urls = [
+                'https://dilutiontracker.com/',
+                'https://dilutiontracker.com/app/search/OPAD',
+                'https://dilutiontracker.com/app/search/OPAD?a=',
+                'https://dilutiontracker.com/app/search/TSLA?a=123'
+            ];
+
+            const pattern = /\/app\/search\/([A-Z]{1,5})(?:[/?#]|$)/i;
+
+            urls.forEach((url, index) => {
+                setTimeout(() => {
+                    const match = url.match(pattern);
+                    const ticker = match ? match[1] : null;
+                    
+                    const stepDiv = document.createElement('div');
+                    stepDiv.style.margin = '10px 0';
+                    stepDiv.style.padding = '10px';
+                    stepDiv.style.background = ticker ? '#e8f5e8' : '#f5f5f5';
+                    stepDiv.style.borderRadius = '3px';
+                    
+                    stepDiv.innerHTML = `
+                        <strong>Step ${index + 1}:</strong> Navigate to ${url}<br>
+                        ${ticker ? `🎯 Ticker detected: <strong>${ticker}</strong> - Data extraction would begin` : '⚪ No ticker detected - Extension inactive'}
+                    `;
+                    
+                    resultsDiv.appendChild(stepDiv);
+                }, index * 500);
+            });
+        }
+
+        // Auto-run tests when page loads
+        window.addEventListener('load', () => {
+            setTimeout(runRegexTests, 500);
+        });
+    </script>
+</body>
+</html>

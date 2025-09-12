@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test DilutionTracker URL Matching</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 20px; 
+            line-height: 1.6;
+        }
+        .test-section { 
+            margin: 20px 0; 
+            padding: 15px; 
+            background: #f5f5f5; 
+            border-radius: 5px; 
+        }
+        .url-test {
+            margin: 10px 0;
+            padding: 10px;
+            background: white;
+            border-radius: 3px;
+            border-left: 4px solid #ccc;
+        }
+        .url-test.pass { border-left-color: #22c55e; }
+        .url-test.fail { border-left-color: #ef4444; }
+        .url { font-family: monospace; background: #f9f9f9; padding: 2px 4px; }
+        .result { font-weight: bold; }
+        .ticker { color: #2563eb; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h1>DilutionTracker URL Matching Test</h1>
+    
+    <div class="test-section">
+        <h2>URL Pattern Testing</h2>
+        <p>Testing the new regex pattern: <code>/\/app\/search\/([A-Z]{1,5})(?:[/?#]|$)/i</code></p>
+        <div id="test-results"></div>
+        <button onclick="runTests()">Run Tests</button>
+    </div>
+
+    <div class="test-section">
+        <h2>Expected Behavior</h2>
+        <p>✅ <strong>Should Match:</strong> URLs with query parameters, fragments, or ending cleanly</p>
+        <p>❌ <strong>Should Not Match:</strong> URLs that don't follow the /app/search/TICKER pattern</p>
+    </div>
+
+    <script>
+        function runTests() {
+            // Test cases that should PASS (extract ticker)
+            const shouldPass = [
+                { url: 'https://dilutiontracker.com/app/search/OPAD', expectedTicker: 'OPAD' },
+                { url: 'https://dilutiontracker.com/app/search/OPAD?a=', expectedTicker: 'OPAD' },
+                { url: 'https://dilutiontracker.com/app/search/OPAD?a=123', expectedTicker: 'OPAD' },
+                { url: 'https://dilutiontracker.com/app/search/TSLA?param=value', expectedTicker: 'TSLA' },
+                { url: 'https://dilutiontracker.com/app/search/AMC#fragment', expectedTicker: 'AMC' },
+                { url: 'https://dilutiontracker.com/app/search/GME/', expectedTicker: 'GME' },
+                { url: 'https://dilutiontracker.com/app/search/PLTR/?a=test', expectedTicker: 'PLTR' },
+                { url: 'https://dilutiontracker.com/app/search/BBBY#section1', expectedTicker: 'BBBY' }
+            ];
+
+            // Test cases that should FAIL (not match the pattern)
+            const shouldFail = [
+                { url: 'https://dilutiontracker.com/', expectedTicker: null },
+                { url: 'https://dilutiontracker.com/app/', expectedTicker: null },
+                { url: 'https://dilutiontracker.com/app/search/', expectedTicker: null },
+                { url: 'https://dilutiontracker.com/app/search/TOOLONG', expectedTicker: null }, // 7 chars
+                { url: 'https://dilutiontracker.com/app/search/123', expectedTicker: null }, // numbers only
+                { url: 'https://dilutiontracker.com/app/other/OPAD', expectedTicker: null }, // wrong path
+                { url: 'https://otherdomain.com/app/search/OPAD', expectedTicker: null } // different domain
+            ];
+
+            const resultsDiv = document.getElementById('test-results');
+            resultsDiv.innerHTML = '';
+
+            // The regex pattern we're testing
+            const pattern = /\/app\/search\/([A-Z]{1,5})(?:[/?#]|$)/i;
+
+            function testUrl(testCase, shouldMatch) {
+                const { url, expectedTicker } = testCase;
+                const match = url.match(pattern);
+                const actualTicker = match ? match[1].toUpperCase() : null;
+                
+                const passed = shouldMatch 
+                    ? (actualTicker === expectedTicker)
+                    : (actualTicker === null);
+                
+                const resultDiv = document.createElement('div');
+                resultDiv.className = `url-test ${passed ? 'pass' : 'fail'}`;
+                
+                const status = passed ? '✅ PASS' : '❌ FAIL';
+                const tickerDisplay = actualTicker ? `<span class="ticker">${actualTicker}</span>` : '<em>no match</em>';
+                
+                resultDiv.innerHTML = `
+                    <div><span class="result">${status}</span> - <span class="url">${url}</span></div>
+                    <div>Expected: ${expectedTicker || '<em>no match</em>'} | Got: ${tickerDisplay}</div>
+                `;
+                
+                return { element: resultDiv, passed };
+            }
+
+            let totalTests = 0;
+            let passedTests = 0;
+
+            // Test cases that should pass
+            resultsDiv.innerHTML += '<h3>✅ Should Match (Extract Ticker)</h3>';
+            shouldPass.forEach(testCase => {
+                const result = testUrl(testCase, true);
+                resultsDiv.appendChild(result.element);
+                totalTests++;
+                if (result.passed) passedTests++;
+            });
+
+            // Test cases that should fail
+            resultsDiv.innerHTML += '<h3>❌ Should Not Match</h3>';
+            shouldFail.forEach(testCase => {
+                const result = testUrl(testCase, false);
+                resultsDiv.appendChild(result.element);
+                totalTests++;
+                if (result.passed) passedTests++;
+            });
+
+            // Summary
+            const summaryDiv = document.createElement('div');
+            summaryDiv.style.marginTop = '20px';
+            summaryDiv.style.padding = '15px';
+            summaryDiv.style.background = passedTests === totalTests ? '#dcfce7' : '#fecaca';
+            summaryDiv.style.borderRadius = '5px';
+            summaryDiv.innerHTML = `
+                <h3>Test Summary</h3>
+                <p><strong>${passedTests}/${totalTests}</strong> tests passed</p>
+                ${passedTests === totalTests ? '🎉 All tests passed!' : '⚠️ Some tests failed - check the regex pattern'}
+            `;
+            resultsDiv.appendChild(summaryDiv);
+        }
+
+        // Auto-run tests when page loads
+        window.addEventListener('load', runTests);
+    </script>
+</body>
+</html>

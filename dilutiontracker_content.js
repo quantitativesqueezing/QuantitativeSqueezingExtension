@@ -13,29 +13,88 @@ if (window.qseDilutionTrackerLoaded) {
   window.qseDilutionTrackerLoaded = true;
   console.log('🔍 DilutionTracker content script loaded');
 
-  // Check if we're on a ticker search page
-  const currentUrl = window.location.href;
-  const tickerMatch = currentUrl.match(/\/app\/search\/([A-Z]{1,5})/i);
-
-  if (tickerMatch) {
-    const ticker = tickerMatch[1].toUpperCase();
-    console.log(`📊 Detected ticker page: ${ticker}`);
+  // Function to check and handle ticker page URLs
+  function checkAndHandleTickerPage() {
+    const currentUrl = window.location.href;
+    console.log(`🔍 DilutionTracker: Checking URL: ${currentUrl}`);
     
-    // Wait for page to load and extract data
-  setTimeout(() => {
-    extractTickerData(ticker);
-  }, 2000); // Wait 2 seconds for dynamic content
-  
-  // Also set up observer for dynamic content changes
-  const observer = new MutationObserver(() => {
-    extractTickerData(ticker);
-  });
-  
-  observer.observe(document.body, {
-    childList: true,
-    subtree: true
-  });
+    // Match pattern: /app/search/TICKER with optional query params (?a=) or fragments (#)
+    const tickerMatch = currentUrl.match(/\/app\/search\/([A-Z]{1,5})(?:[/?#]|$)/i);
+
+    if (tickerMatch) {
+      const ticker = tickerMatch[1].toUpperCase();
+      console.log(`📊 Detected ticker page: ${ticker} (from URL: ${currentUrl})`);
+      
+      // Store the current ticker for comparison
+      if (window.qseCurrentTicker !== ticker) {
+        window.qseCurrentTicker = ticker;
+        
+        // Wait for page to load and extract data
+        setTimeout(() => {
+          extractTickerData(ticker);
+        }, 2000); // Wait 2 seconds for dynamic content
+        
+        // Set up observer for dynamic content changes if not already set
+        if (!window.qseMutationObserver) {
+          const observer = new MutationObserver(() => {
+            if (window.qseCurrentTicker) {
+              extractTickerData(window.qseCurrentTicker);
+            }
+          });
+          
+          observer.observe(document.body, {
+            childList: true,
+            subtree: true
+          });
+          
+          window.qseMutationObserver = observer;
+          console.log(`🔍 Set up mutation observer for dynamic content changes`);
+        }
+      }
+    } else {
+      // Not a ticker page, clear current ticker
+      window.qseCurrentTicker = null;
+      console.log(`🔍 Not a ticker page: ${currentUrl}`);
+    }
   }
+
+  // Check initial page load
+  checkAndHandleTickerPage();
+
+  // Listen for URL changes (for single-page app navigation)
+  let lastUrl = window.location.href;
+  new MutationObserver(() => {
+    const currentUrl = window.location.href;
+    if (currentUrl !== lastUrl) {
+      lastUrl = currentUrl;
+      console.log(`🔍 DilutionTracker: URL changed to: ${currentUrl}`);
+      setTimeout(() => {
+        checkAndHandleTickerPage();
+      }, 100); // Small delay to let page settle
+    }
+  }).observe(document, { subtree: true, childList: true });
+
+  // Also listen for popstate events (back/forward navigation)
+  window.addEventListener('popstate', () => {
+    console.log(`🔍 DilutionTracker: Popstate event detected`);
+    setTimeout(() => {
+      checkAndHandleTickerPage();
+    }, 100);
+  });
+
+  // Expose debugging functions to window for manual testing
+  window.qseDebug = {
+    extractTickerData: extractTickerData,
+    addVerificationIcons: addVerificationIcons,
+    checkUrl: checkAndHandleTickerPage,
+    testPattern: (url) => {
+      const pattern = /\/app\/search\/([A-Z]{1,5})(?:[/?#]|$)/i;
+      const match = url.match(pattern);
+      return match ? match[1] : null;
+    }
+  };
+  
+  console.log('🔧 DilutionTracker: Debug functions exposed at window.qseDebug');
 }
 
 /**
@@ -45,6 +104,9 @@ if (window.qseDilutionTrackerLoaded) {
 async function extractTickerData(ticker) {
   try {
     console.log(`🔍 Extracting data for ${ticker}...`);
+    console.log(`🔍 Current URL: ${window.location.href}`);
+    console.log(`🔍 Page title: ${document.title}`);
+    console.log(`🔍 Page loaded: ${document.readyState}`);
     
     // Find the float wrapper div
     const floatWrapper = document.getElementById('company-description-float-wrapper');
@@ -508,9 +570,33 @@ async function addVerificationIcons(ticker, currentData) {
     ];
     
     companyFields.forEach(({ field, label, unit }) => {
+      const hasCurrentData = !!currentData[field];
+      const storedValue = storedData?.[field];
+      const currentValue = currentData[field];
+      const valuesMatch = storedValue === currentValue;
+      
+      // Enhanced debugging for sector and industry
+      if (field === 'sector' || field === 'industry') {
+        console.log(`🔍 DEBUG ${field}:`, {
+          hasCurrentData,
+          currentValue,
+          storedValue,
+          valuesMatch,
+          isFirstTime,
+          willAdd: hasCurrentData && (isFirstTime || valuesMatch)
+        });
+      }
+      
       if (currentData[field] && (isFirstTime || storedData?.[field] === currentData[field])) {
         const value = unit ? `${currentData[field]}${unit}` : currentData[field];
         matchingFields.push({ field, value, label });
+        
+        // Additional debug for sector/industry
+        if (field === 'sector' || field === 'industry') {
+          console.log(`✅ Added ${field} to matching fields: "${value}"`);
+        }
+      } else if (field === 'sector' || field === 'industry') {
+        console.log(`❌ ${field} not added to matching fields - hasData: ${hasCurrentData}, isFirstTime: ${isFirstTime}, valuesMatch: ${valuesMatch}`);
       }
     });
     
@@ -568,10 +654,23 @@ function highlightDirectElements(matchingFields) {
   });
   
   // 1. Search for "Industry:" and highlight its sibling value
+  console.log(`🎯 DEBUG: Attempting to highlight Industry with value: "${fieldValues.industry}"`);
   highlightLabelSibling('Industry:', fieldValues.industry);
   
   // 2. Search for "Sector:" and highlight its sibling value  
+  console.log(`🎯 DEBUG: Attempting to highlight Sector with value: "${fieldValues.sector}"`);
   highlightLabelSibling('Sector:', fieldValues.sector);
+  
+  // 3. FALLBACK: If no specific values found, try to highlight any Sector:/Industry: labels we can find
+  if (!fieldValues.sector) {
+    console.log(`🎯 FALLBACK: No sector value in matching fields, trying generic sector highlighting`);
+    highlightGenericLabel('Sector:');
+  }
+  
+  if (!fieldValues.industry) {
+    console.log(`🎯 FALLBACK: No industry value in matching fields, trying generic industry highlighting`);
+    highlightGenericLabel('Industry:');
+  }
   
   // 3. Search for "Country:" and highlight its sibling value
   highlightLabelSibling('Country:', fieldValues.country);
@@ -686,6 +785,63 @@ function highlightLabelSibling(labelText, expectedValue) {
   }
   
   console.log(`❌ Could not find and verify label "${labelText}" with expected value`);
+}
+
+/**
+ * Generic label highlighting - highlights labels even without exact value matching
+ * @param {string} labelText - The label text to search for (e.g., "Industry:", "Sector:")
+ */
+function highlightGenericLabel(labelText) {
+  console.log(`🎯 Generic highlighting for label "${labelText}"`);
+  
+  // Create a TreeWalker to find all text nodes
+  const walker = document.createTreeWalker(
+    document.body,
+    NodeFilter.SHOW_TEXT,
+    {
+      acceptNode: function(node) {
+        // Skip text nodes that are inside already highlighted elements
+        if (node.parentElement && (
+          node.parentElement.classList.contains('qse-verified-label') ||
+          node.parentElement.classList.contains('qse-verified-value') ||
+          node.parentElement.style.color === 'rgb(34, 197, 94)'
+        )) {
+          return NodeFilter.FILTER_REJECT;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    },
+    false
+  );
+  
+  let node;
+  while (node = walker.nextNode()) {
+    const text = node.nodeValue.trim();
+    
+    // Check if this text node contains our label
+    if (text.includes(labelText)) {
+      console.log(`🎯 Found generic label "${labelText}" in text: "${text}"`);
+      
+      // Get the parent element
+      let parentElement = node.parentElement;
+      if (parentElement) {
+        // Check if this element is already highlighted
+        if (parentElement.classList.contains('qse-verified-label') || parentElement.style.color === 'rgb(34, 197, 94)') {
+          console.log(`⚠️ Generic label "${labelText}" already highlighted, skipping`);
+          return;
+        }
+        
+        // Highlight the element containing the label
+        parentElement.style.color = 'rgb(34, 197, 94) !important';
+        parentElement.style.fontWeight = '500';
+        parentElement.classList.add('qse-verified-label');
+        console.log(`🎯 Applied generic green styling to label "${labelText}"`);
+        return;
+      }
+    }
+  }
+  
+  console.log(`❌ Could not find generic label "${labelText}"`);
 }
 
 /**
@@ -1391,7 +1547,7 @@ async function storeTickerDataIfChanged(ticker, newData) {
       console.error('❌ Chrome storage API not available');
       return;
     }
-c
+
     // Get existing data
     const result = await chrome.storage.local.get(`ticker_${ticker}`);
     const existingData = result[`ticker_${ticker}`];
