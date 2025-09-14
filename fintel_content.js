@@ -63,9 +63,84 @@ async function extractFintelData(ticker) {
     } else {
       console.log('❌ Could not parse Fintel data from page');
     }
+
+    // Independently highlight the Short Interest VALUE in green when present
+    // This runs regardless of stored/parsed data so users get immediate visual cue
+    setTimeout(() => {
+      try { highlightShortInterestValueGreen(); } catch (e) { console.warn('SI value highlight error', e); }
+    }, 100);
     
   } catch (error) {
     console.error('❌ Error extracting Fintel data:', error);
+  }
+}
+
+/**
+ * Find "Short Interest" on the page and color just the VALUE in green.
+ * Handles common Fintel layouts: tables (label/value in cells) and inline text "Short Interest: <value>".
+ */
+function highlightShortInterestValueGreen() {
+  const GREEN = 'rgb(34, 197, 94)';
+
+  try {
+    // 1) Table layout: label in one cell, value in the next
+    const rows = document.querySelectorAll('tr');
+    rows.forEach(row => {
+      const cells = Array.from(row.querySelectorAll('th,td'));
+      cells.forEach((cell, idx) => {
+        const label = (cell.textContent || '').trim();
+        if (/^\s*short\s*interest\s*$/i.test(label) || /short\s*interest/i.test(label)) {
+          const valueCell = cells[idx + 1];
+          if (valueCell && !valueCell.hasAttribute('data-qse-green-si-value')) {
+            valueCell.style.color = GREEN;
+            valueCell.style.fontWeight = '500';
+            valueCell.setAttribute('data-qse-green-si-value', 'true');
+            valueCell.title = 'Short Interest value';
+          }
+        }
+      });
+    });
+
+    // 2) Inline text layout: "Short Interest: 167,565,108 shares"
+    const re = /Short\s*Interest\s*[:\-–—]?\s*([\d.,]+\s*(?:[KMB]\b)?\s*(?:shares|shrs)?)(?!\s*%)/i;
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
+    let node;
+    while ((node = walker.nextNode())) {
+      const text = node.nodeValue || '';
+      if (!/short\s*interest/i.test(text)) continue;
+      const m = text.match(re);
+      if (m && m[1]) {
+        const valueText = m[1];
+        const fullMatch = m[0];
+        const valueOffsetInMatch = fullMatch.indexOf(valueText);
+        const absStart = m.index + valueOffsetInMatch;
+        const absEnd = absStart + valueText.length;
+
+        const before = text.slice(0, absStart);
+        const after = text.slice(absEnd);
+
+        // Skip if parent already processed
+        const parent = node.parentNode;
+        if (!parent || parent.nodeType !== 1) continue;
+        if (parent.hasAttribute && parent.hasAttribute('data-qse-green-si-inline')) continue;
+
+        const beforeNode = document.createTextNode(before);
+        const span = document.createElement('span');
+        span.textContent = valueText;
+        span.style.color = GREEN;
+        span.style.fontWeight = '500';
+        span.setAttribute('data-qse-green-si-value', 'true');
+        const afterNode = document.createTextNode(after);
+
+        parent.insertBefore(beforeNode, node);
+        parent.insertBefore(span, node);
+        parent.insertBefore(afterNode, node);
+        parent.removeChild(node);
+        parent.setAttribute('data-qse-green-si-inline', 'true');
+      }
+    }
+  } catch (err) {
+    console.warn('highlightShortInterestValueGreen error:', err);
   }
 }
 
@@ -190,11 +265,11 @@ function extractFromSpecificTables() {
   const result = {};
   
   try {
-    // Extract from #short-shares-availability-table
+    // Extract from #short-shares-availability-table (recent 3 rows only)
     const shortSharesTable = document.querySelector('#short-shares-availability-table');
     if (shortSharesTable) {
-      result.shortSharesAvailabilityTable = extractTableData(shortSharesTable, 'Short Shares Availability');
-      console.log('✅ Extracted short shares availability table data');
+      result.shortSharesAvailabilityTable = extractShortSharesAvailabilityData(shortSharesTable);
+      console.log('✅ Extracted short shares availability table data (recent 3 rows)');
     }
     
     // Extract from #table-short-borrow-rate
@@ -295,6 +370,84 @@ function extractTableData(table, tableName) {
   }
   
   return rows;
+}
+
+/**
+ * Extract Short Shares Availability data - only recent 3 rows with specific columns
+ * @param {Element} table - The table element
+ * @returns {Array} Array of recent 3 rows with Time Since Last Change and Short Shares Availability
+ */
+function extractShortSharesAvailabilityData(table) {
+  const rows = [];
+  
+  try {
+    const tableRows = table.querySelectorAll('tr');
+    const headers = [];
+    let timeSinceColumnIndex = -1;
+    let sharesAvailableColumnIndex = -1;
+    
+    console.log(`🔍 Processing Short Shares Availability table with ${tableRows.length} rows`);
+    
+    tableRows.forEach((row, index) => {
+      const cells = row.querySelectorAll('td, th');
+      
+      if (index === 0) {
+        // Header row - find the columns we need
+        cells.forEach((cell, cellIndex) => {
+          const headerText = cell.textContent.trim();
+          headers.push(headerText);
+          
+          // Look for "Time Since Last Change" column
+          if (headerText.toLowerCase().includes('time since') || 
+              headerText.toLowerCase().includes('last change')) {
+            timeSinceColumnIndex = cellIndex;
+            console.log(`✅ Found "Time Since Last Change" column at index ${cellIndex}`);
+          }
+          
+          // Look for "Short Shares Availability" column
+          if (headerText.toLowerCase().includes('short shares') || 
+              headerText.toLowerCase().includes('availability')) {
+            sharesAvailableColumnIndex = cellIndex;
+            console.log(`✅ Found "Short Shares Availability" column at index ${cellIndex}`);
+          }
+        });
+      } else {
+        // Data row
+        const rowData = {};
+        let hasValidData = false;
+        
+        cells.forEach((cell, cellIndex) => {
+          const value = cell.textContent.trim();
+          
+          // Only store the columns we care about
+          if (cellIndex === timeSinceColumnIndex && value) {
+            rowData.timeSinceLastChange = value;
+            hasValidData = true;
+          }
+          
+          if (cellIndex === sharesAvailableColumnIndex && value) {
+            rowData.shortSharesAvailability = value;
+            hasValidData = true;
+          }
+        });
+        
+        if (hasValidData) {
+          console.log(`📊 Row ${index}: Time Since: "${rowData.timeSinceLastChange}", Shares: "${rowData.shortSharesAvailability}"`);
+          rows.push(rowData);
+        }
+      }
+    });
+    
+    // Only keep the most recent 3 rows
+    const recentRows = rows.slice(0, 3);
+    console.log(`✅ Extracted ${recentRows.length} recent rows from Short Shares Availability table`);
+    
+    return recentRows;
+    
+  } catch (error) {
+    console.error('❌ Error extracting Short Shares Availability data:', error);
+    return [];
+  }
 }
 
 /**
@@ -607,14 +760,18 @@ function addFintelGreenTextToElement(container, field, value) {
           
           // Check if green styling already exists for this field
           if (parent && !parent.hasAttribute(`data-qse-green-${field}`)) {
-            // Apply green text styling to the parent element
-            parent.style.color = '#22c55e';
-            parent.style.fontWeight = 'bold';
-            parent.style.textShadow = '0 1px 2px rgba(34, 197, 94, 0.3)';
-            parent.setAttribute(`data-qse-green-${field}`, 'true');
-            parent.title = `${field} matches extension storage: ${value}`;
+            // Try to find and highlight the label part instead of the value
+            const labelHighlighted = highlightFintelLabel(parent, field, value, text);
             
-            console.log(`🟢 Added Fintel green text for ${field}: ${value} to element: "${text.trim()}"`);
+            if (!labelHighlighted) {
+              // Fallback: Apply green text styling to the parent element
+              parent.style.color = 'rgb(34, 197, 94) !important';
+              parent.style.fontWeight = '500';
+              parent.setAttribute(`data-qse-green-${field}`, 'true');
+              parent.title = `${field} matches extension storage: ${value}`;
+              console.log(`🟢 Added Fintel green text (fallback) for ${field}: ${value} to element: "${text.trim()}"`);
+            }
+            
             return; // Exit after applying green styling
           } else if (parent?.hasAttribute(`data-qse-green-${field}`)) {
             console.log(`⚠️ Fintel green text already applied for ${field}`);
@@ -625,6 +782,169 @@ function addFintelGreenTextToElement(container, field, value) {
     
   } catch (error) {
     console.error(`❌ Error adding Fintel green text for ${field}:`, error);
+  }
+}
+
+/**
+ * Highlight the label portion of Fintel data elements
+ * @param {Element} parentElement - The parent element containing the text
+ * @param {string} field - Field name (shortInterest, costToBorrow, etc.)
+ * @param {string} value - Current value
+ * @param {string} text - The text content to search within
+ * @returns {boolean} True if label was highlighted, false otherwise
+ */
+function highlightFintelLabel(parentElement, field, value, text) {
+  try {
+    // Define label patterns for different Fintel fields
+    const labelPatterns = {
+      shortInterest: [
+        /Short\s+Interest(?=[:\s])/i,
+        /Shares\s+Short(?=[:\s])/i
+      ],
+      shortInterestRatio: [
+        /Short\s+Interest\s+Ratio(?=[:\s])/i,
+        /Short\s+Ratio(?=[:\s])/i,
+        /Days\s+to\s+Cover(?=[:\s])/i
+      ],
+      shortInterestPercentFloat: [
+        /Short\s+Interest\s+%\s+Float(?=[:\s])/i,
+        /Short\s+Interest\s+%\s+of\s+Float(?=[:\s])/i
+      ],
+      costToBorrow: [
+        /Cost\s+to\s+Borrow(?=[:\s])/i,
+        /Borrow\s+Rate(?=[:\s])/i
+      ],
+      failureToDeliver: [
+        /Failure\s+to\s+Deliver(?=[:\s])/i,
+        /Fails\s+to\s+Deliver(?=[:\s])/i
+      ],
+      utilization: [
+        /Utilization(?=[:\s])/i
+      ]
+    };
+    
+    const patterns = labelPatterns[field];
+    if (!patterns) {
+      console.log(`❌ No label patterns defined for Fintel field: ${field}`);
+      return false;
+    }
+    
+    // Check if the text contains the value (confirming this is the right element)
+    if (!text.includes(value)) {
+      return false;
+    }
+    
+    // Try to find and highlight just the label portion
+    for (const pattern of patterns) {
+      if (pattern.test(text)) {
+        // If the parent element text is short, highlight the whole element
+        if (parentElement.textContent.length < 100) {
+          // Look for a more specific child element containing just the label
+          const labelElement = findLabelOnlyElement(parentElement, pattern);
+          
+          if (labelElement) {
+            labelElement.style.color = 'rgb(34, 197, 94) !important';
+            labelElement.style.fontWeight = '500';
+            labelElement.setAttribute(`data-qse-green-${field}`, 'true');
+            labelElement.title = `${field} matches extension storage: ${value}`;
+            console.log(`🟢 Added Fintel green text to label for ${field}`);
+            return true;
+          }
+        }
+        
+        // Fallback: Create a span around the label text
+        return createLabelSpan(parentElement, pattern, field, value);
+      }
+    }
+    
+    return false;
+    
+  } catch (error) {
+    console.error(`❌ Error highlighting Fintel label for ${field}:`, error);
+    return false;
+  }
+}
+
+/**
+ * Find a child element that contains only the label (not the value)
+ * @param {Element} parentElement - The parent element
+ * @param {RegExp} labelPattern - The label pattern to match
+ * @returns {Element|null} The label-only element or null
+ */
+function findLabelOnlyElement(parentElement, labelPattern) {
+  const children = Array.from(parentElement.children);
+  
+  for (const child of children) {
+    const childText = child.textContent.trim();
+    
+    // If child contains label but is short and doesn't contain numbers, it's likely just the label
+    if (labelPattern.test(childText) && childText.length < 50 && !/\d+/.test(childText)) {
+      return child;
+    }
+  }
+  
+  return null;
+}
+
+/**
+ * Create a span around just the label text
+ * @param {Element} parentElement - The parent element
+ * @param {RegExp} labelPattern - The label pattern to match
+ * @param {string} field - Field name
+ * @param {string} value - Field value
+ * @returns {boolean} True if span was created successfully
+ */
+function createLabelSpan(parentElement, labelPattern, field, value) {
+  try {
+    // Find text nodes containing the label
+    const walker = document.createTreeWalker(
+      parentElement,
+      NodeFilter.SHOW_TEXT,
+      null,
+      false
+    );
+    
+    let node;
+    while (node = walker.nextNode()) {
+      const text = node.nodeValue;
+      const match = text.match(labelPattern);
+      
+      if (match) {
+        const labelText = match[0];
+        const labelIndex = text.indexOf(labelText);
+        
+        // Split the text into parts
+        const beforeLabel = text.substring(0, labelIndex);
+        const label = text.substring(labelIndex, labelIndex + labelText.length);
+        const afterLabel = text.substring(labelIndex + labelText.length);
+        
+        // Create new elements
+        const beforeNode = document.createTextNode(beforeLabel);
+        const labelSpan = document.createElement('span');
+        labelSpan.textContent = label;
+        labelSpan.style.color = 'rgb(34, 197, 94) !important';
+        labelSpan.style.fontWeight = '500';
+        labelSpan.setAttribute(`data-qse-green-${field}`, 'true');
+        labelSpan.title = `${field} matches extension storage: ${value}`;
+        const afterNode = document.createTextNode(afterLabel);
+        
+        // Replace the original text node
+        const parent = node.parentNode;
+        parent.insertBefore(beforeNode, node);
+        parent.insertBefore(labelSpan, node);
+        parent.insertBefore(afterNode, node);
+        parent.removeChild(node);
+        
+        console.log(`🟢 Created label span for Fintel ${field}: "${labelText}"`);
+        return true;
+      }
+    }
+    
+    return false;
+    
+  } catch (error) {
+    console.error(`❌ Error creating label span for ${field}:`, error);
+    return false;
   }
 }
 

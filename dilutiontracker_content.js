@@ -36,9 +36,33 @@ if (window.qseDilutionTrackerLoaded) {
         
         // Set up observer for dynamic content changes if not already set
         if (!window.qseMutationObserver) {
-          const observer = new MutationObserver(() => {
-            if (window.qseCurrentTicker) {
-              extractTickerData(window.qseCurrentTicker);
+          const observer = new MutationObserver((mutations) => {
+            // Only trigger if there are significant changes (not just our highlighting)
+            const hasSignificantChanges = mutations.some(mutation => {
+              // Skip mutations caused by our own highlighting
+              if (mutation.target.classList && (
+                mutation.target.classList.contains('qse-verified-label') ||
+                mutation.target.classList.contains('qse-verified-value')
+              )) {
+                return false;
+              }
+              
+              // Check for significant content changes
+              return mutation.type === 'childList' && 
+                     mutation.addedNodes.length > 0 &&
+                     Array.from(mutation.addedNodes).some(node => 
+                       node.nodeType === Node.ELEMENT_NODE && 
+                       node.tagName !== 'SPAN' // Ignore our span additions
+                     );
+            });
+            
+            if (hasSignificantChanges && window.qseCurrentTicker) {
+              console.log('🔍 Significant DOM changes detected, re-extracting data');
+              // Add delay to prevent rapid re-execution
+              clearTimeout(window.qseExtractionTimeout);
+              window.qseExtractionTimeout = setTimeout(() => {
+                extractTickerData(window.qseCurrentTicker);
+              }, 1000);
             }
           });
           
@@ -103,6 +127,13 @@ if (window.qseDilutionTrackerLoaded) {
  */
 async function extractTickerData(ticker) {
   try {
+    // Prevent concurrent executions
+    if (window.qseExtracting) {
+      console.log('🔍 Data extraction already in progress, skipping');
+      return;
+    }
+    
+    window.qseExtracting = true;
     console.log(`🔍 Extracting data for ${ticker}...`);
     console.log(`🔍 Current URL: ${window.location.href}`);
     console.log(`🔍 Page title: ${document.title}`);
@@ -176,6 +207,9 @@ async function extractTickerData(ticker) {
     
   } catch (error) {
     console.error('❌ Error extracting ticker data:', error);
+  } finally {
+    // Always clear the extraction flag
+    window.qseExtracting = false;
   }
 }
 
@@ -381,23 +415,29 @@ function extractEstimatedCash() {
     // Look for cash information in the page text
     const pageText = document.body.textContent || '';
     
-    // Pattern to match: "estimated current cash of $22.9M"
+    // Pattern to match: "estimated current cash of $22.9M" or "quarterly operating cash flow of $22.9M"
     const cashPatterns = [
       /estimated\s+current\s+cash\s+of\s+\$([0-9,.]+)\s*([MB])(?!\w)/i,
+      /quarterly\s+operating\s+cash\s+flow\s+of\s+\$([0-9,.]+)\s*([MB])(?!\w)/i,
       /current\s+cash\s+of\s+\$([0-9,.]+)\s*([MB])(?!\w)/i,
       /cash\s+of\s+\$([0-9,.]+)\s*([MB])(?!\w)/i,
       /estimated\s+cash[:\s]+\$([0-9,.]+)\s*([MB])(?!\w)/i,
       /quarterly\s+cash\s+burn\s+of\s+-?\$[0-9,.]+[MB]\s+and\s+estimated\s+current\s+cash\s+of\s+\$([0-9,.]+)\s*([MB])(?!\w)/i
     ];
     
-    for (const pattern of cashPatterns) {
+    for (let i = 0; i < cashPatterns.length; i++) {
+      const pattern = cashPatterns[i];
       const match = pageText.match(pattern);
       if (match) {
         const cashNum = parseFloat(match[1].replace(/,/g, ''));
         const cashUnit = match[2].toUpperCase();
         const cashInMillions = convertToMillions(cashNum, cashUnit);
         
-        console.log(`✅ Found cash: $${cashInMillions}M (from "${match[0]}")`);
+        const patternType = i === 0 ? 'estimated current cash' : 
+                          i === 1 ? 'quarterly operating cash flow' : 
+                          `pattern ${i + 1}`;
+        
+        console.log(`✅ Found ${patternType}: $${cashInMillions}M (from "${match[0]}")`);
         return cashInMillions;
       }
     }
@@ -661,16 +701,16 @@ function highlightDirectElements(matchingFields) {
   console.log(`🎯 DEBUG: Attempting to highlight Sector with value: "${fieldValues.sector}"`);
   highlightLabelSibling('Sector:', fieldValues.sector);
   
-  // 3. FALLBACK: If no specific values found, try to highlight any Sector:/Industry: labels we can find
-  if (!fieldValues.sector) {
-    console.log(`🎯 FALLBACK: No sector value in matching fields, trying generic sector highlighting`);
-    highlightGenericLabel('Sector:');
-  }
+  // 3. FALLBACK: Disabled to prevent excessive DOM processing
+  // if (!fieldValues.sector) {
+  //   console.log(`🎯 FALLBACK: No sector value in matching fields, trying generic sector highlighting`);
+  //   highlightGenericLabel('Sector:');
+  // }
   
-  if (!fieldValues.industry) {
-    console.log(`🎯 FALLBACK: No industry value in matching fields, trying generic industry highlighting`);
-    highlightGenericLabel('Industry:');
-  }
+  // if (!fieldValues.industry) {
+  //   console.log(`🎯 FALLBACK: No industry value in matching fields, trying generic industry highlighting`);
+  //   highlightGenericLabel('Industry:');
+  // }
   
   // 3. Search for "Country:" and highlight its sibling value
   highlightLabelSibling('Country:', fieldValues.country);
@@ -690,13 +730,22 @@ function highlightDirectElements(matchingFields) {
     companyDescElement.classList.add('qse-verified-value');
   }
   
-  // 7. Search for "estimated current cash" text and highlight containing element
+  // 7. Search for cash text patterns and highlight entire snippets
   if (fieldValues.estimatedCash) {
+    console.log(`🎯 DEBUG: Attempting to highlight cash snippets for value: "${fieldValues.estimatedCash}"`);
+    
+    // Try multiple cash text patterns - highlight entire snippets including dollar amounts
+    highlightCashFlowText('estimated current cash of', fieldValues.estimatedCash);
+    highlightCashFlowText('quarterly operating cash flow of', fieldValues.estimatedCash);
+    
+    // Also try the containing element approach as fallback
     highlightTextContainingElement('estimated current cash of', fieldValues.estimatedCash);
+    highlightTextContainingElement('quarterly operating cash flow of', fieldValues.estimatedCash);
   }
   
-  // 8. Also highlight just the "and estimated current cash of" text itself
+  // 8. Also highlight specific cash text patterns (simpler patterns)
   highlightSpecificText('and estimated current cash of');
+  highlightSpecificText('quarterly operating cash flow of');
 }
 
 /**
@@ -732,7 +781,11 @@ function highlightLabelSibling(labelText, expectedValue) {
   );
   
   let node;
-  while (node = walker.nextNode()) {
+  let processedNodes = 0;
+  const maxNodes = 50; // Limit processing to prevent infinite loops
+  
+  while ((node = walker.nextNode()) && processedNodes < maxNodes) {
+    processedNodes++;
     const text = node.nodeValue.trim();
     
     // Check if this text node contains our label
@@ -1020,6 +1073,116 @@ function highlightSpecificText(searchText) {
   }
   
   console.log(`❌ Could not find text "${searchText}" to highlight`);
+}
+
+/**
+ * Find and highlight cash flow text snippets (e.g., "quarterly operating cash flow of $15.2M")
+ * @param {string} cashPattern - The cash pattern text (e.g., "estimated current cash of")
+ * @param {string} expectedValue - Expected cash value (e.g., "15.2M")
+ */
+function highlightCashFlowText(cashPattern, expectedValue) {
+  console.log(`🎯 Searching for cash flow text: "${cashPattern}" with value: "${expectedValue}"`);
+  
+  // Convert expectedValue to search for both formats (15.2M and $15.2M)
+  const cashAmount = expectedValue.replace('M', '').replace('B', '');
+  const unit = expectedValue.match(/[MB]$/)?.[0] || 'M';
+  
+  // Create patterns to match the full cash flow text
+  const fullPatterns = [
+    new RegExp(`${cashPattern.replace(/\s+/g, '\\s+')}\\s+\\$${cashAmount}\\s*${unit}`, 'i'),
+    new RegExp(`${cashPattern.replace(/\s+/g, '\\s+')}\\s+\\$${cashAmount}\\.\\d+\\s*${unit}`, 'i'),
+    new RegExp(`${cashPattern.replace(/\s+/g, '\\s+')}\\s+\\$[0-9.,]+\\s*${unit}`, 'i')
+  ];
+  
+  console.log(`🎯 DEBUG: Searching for patterns:`, fullPatterns);
+  
+  // Search all elements for the complete cash flow text
+  const allElements = document.querySelectorAll('*');
+  
+  for (const element of allElements) {
+    const text = element.textContent;
+    
+    // Skip if already highlighted
+    if (element.classList.contains('qse-verified-value') || element.style.color === 'rgb(34, 197, 94)') {
+      continue;
+    }
+    
+    for (let i = 0; i < fullPatterns.length; i++) {
+      const pattern = fullPatterns[i];
+      const match = text.match(pattern);
+      
+      if (match) {
+        console.log(`🎯 Found complete cash flow text: "${match[0]}" in element: "${text.substring(0, 100)}..."`);
+        
+        // Check if this is a reasonably sized element to highlight entirely
+        if (text.length < 200) {
+          // Highlight the entire element
+          element.style.color = 'rgb(34, 197, 94) !important';
+          element.style.fontWeight = '500';
+          element.classList.add('qse-verified-value');
+          console.log(`🎯 Highlighted entire element containing cash flow text`);
+          return;
+        } else {
+          // Create a span around just the matching text
+          highlightCashFlowTextWithSpan(element, match[0]);
+          return;
+        }
+      }
+    }
+  }
+  
+  console.log(`❌ Could not find cash flow text for pattern "${cashPattern}"`);
+}
+
+/**
+ * Create a span around specific cash flow text within an element
+ * @param {Element} element - The element containing the text
+ * @param {RegExp} pattern - The pattern that matched
+ * @param {string} matchedText - The text that matched
+ */
+function highlightCashFlowTextWithSpan(element, matchedText) {
+  console.log(`🎯 Creating span for cash flow text: "${matchedText}"`);
+  
+  // Find all text nodes in the element
+  const walker = document.createTreeWalker(
+    element,
+    NodeFilter.SHOW_TEXT,
+    null,
+    false
+  );
+  
+  let node;
+  while (node = walker.nextNode()) {
+    const text = node.nodeValue;
+    
+    if (text.includes(matchedText)) {
+      const textIndex = text.indexOf(matchedText);
+      
+      // Split the text into parts
+      const beforeText = text.substring(0, textIndex);
+      const cashText = text.substring(textIndex, textIndex + matchedText.length);
+      const afterText = text.substring(textIndex + matchedText.length);
+      
+      // Create new elements
+      const beforeNode = document.createTextNode(beforeText);
+      const cashSpan = document.createElement('span');
+      cashSpan.textContent = cashText;
+      cashSpan.style.color = 'rgb(34, 197, 94) !important';
+      cashSpan.style.fontWeight = '500';
+      cashSpan.classList.add('qse-verified-value');
+      const afterNode = document.createTextNode(afterText);
+      
+      // Replace the original text node
+      const parent = node.parentNode;
+      parent.insertBefore(beforeNode, node);
+      parent.insertBefore(cashSpan, node);
+      parent.insertBefore(afterNode, node);
+      parent.removeChild(node);
+      
+      console.log(`🎯 Successfully wrapped cash flow text "${matchedText}" in green span`);
+      return;
+    }
+  }
 }
 
 /**

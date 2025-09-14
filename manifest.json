@@ -12,6 +12,7 @@
   "permissions": ["storage"],
   "host_permissions": [
     "https://finviz.com/*",
+    "https://fintel.io/*",
     "https://dilutiontracker.com/*",
     "https://*.dilutiontracker.com/*",
     "https://api.dilutiontracker.com/*",

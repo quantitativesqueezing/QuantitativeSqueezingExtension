@@ -237,20 +237,72 @@ async function fetchFreeFloat(symbol) {
    Short Interest (Fintel)
 ---------------------------- */
 
-/* Short Interest: FinViz only (IBKR stub for future use) */
+/* Short Interest: Fintel first, FinViz fallback */
 async function fetchShortInterest(symbol) {
-  // IBKR placeholder
+  // Try Fintel short interest page (shares value)
+  try {
+    const fintel = await fetchFintelShortInterest(symbol);
+    if (fintel) return fintel; // e.g., "167,565,108 shares"
+  } catch (_) {
+    // ignore and fallback
+  }
+
+  // IBKR placeholder (if ever implemented later)
   const ibkr = await fetchShortInterestIBKR(symbol);
   if (ibkr) return ibkr;
-  // FinViz fallback
-  const resp = await fetch(`https://finviz.com/quote.ashx?t=${encodeURIComponent(symbol)}`, { cache: 'no-cache' });
-  if (!resp.ok) return null;
-  const text = await resp.text();
-  // parse “Short Float” or “Short Interest” values via regex
-  let m = text.match(/Short\s*Float[^<]*<td[^>]*>([^<]+)/i);
-  if (m) return m[1].trim();
-  m = text.match(/Short\s*Interest[^<]*<td[^>]*>([^<]+)/i);
-  if (m) return m[1].trim();
+
+  // FinViz fallback (often a percent like "Short Float")
+  try {
+    const resp = await fetch(`https://finviz.com/quote.ashx?t=${encodeURIComponent(symbol)}`, { cache: 'no-cache' });
+    if (!resp.ok) return null;
+    const text = await resp.text();
+    // parse “Short Float” or “Short Interest” values via regex
+    let m = text.match(/Short\s*Float[^<]*<td[^>]*>([^<]+)/i);
+    if (m) return m[1].trim();
+    m = text.match(/Short\s*Interest[^<]*<td[^>]*>([^<]+)/i);
+    if (m) return m[1].trim();
+  } catch (_) {
+    // swallow
+  }
+  return null;
+}
+
+async function fetchFintelShortInterest(symbol) {
+  const url = `https://fintel.io/ss/us/${encodeURIComponent(symbol)}`;
+  const res = await fetch(url, { cache: 'no-cache', credentials: 'include' });
+  if (!res.ok) return null;
+  const html = await res.text();
+  return parseFintelShortInterest(html);
+}
+
+function parseFintelShortInterest(html) {
+  // Prefer explicit "Short Interest" with shares unit
+  // Examples we try to capture:
+  //  - Short Interest: 167,565,108 shares
+  //  - Short Interest Shares: 167,565,108
+  //  - Shares Short: 167,565,108
+  const text = html
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ') // strip tags
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  // Try most specific first: "Short Interest" followed by shares
+  let m = text.match(/Short\s*Interest\s*[:\-–—]?\s*([\d.,]+)\s*shares/i);
+  if (m && m[1]) return `${m[1].trim()} shares`;
+
+  // Alternate labels
+  m = text.match(/Short\s*Interest\s*Shares\s*[:\-–—]?\s*([\d.,]+)/i);
+  if (m && m[1]) return `${m[1].trim()} shares`;
+
+  m = text.match(/Shares\s*Short\s*[:\-–—]?\s*([\d.,]+)/i);
+  if (m && m[1]) return `${m[1].trim()} shares`;
+
+  // Guard against percentage match (ensure not followed by %)
+  m = text.match(/Short\s*Interest\s*[:\-–—]?\s*([\d.,]+)(?!\s*%)/i);
+  if (m && m[1]) return `${m[1].trim()} shares`;
+
   return null;
 }
 
