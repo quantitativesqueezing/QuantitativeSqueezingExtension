@@ -5,6 +5,27 @@
  * — scans text nodes for $TICKER patterns and shows a tooltip on hover.
  * — zero‑mutation hover detector for $TICKER patterns.
  */
+// Debug mode guard: wrap console.log/debug based on chrome.storage.local.debug_mode
+(function initDebugGuard(){
+  try {
+    const origLog = console.log.bind(console);
+    const origDebug = (console.debug || console.log).bind(console);
+    let enabled = false;
+    function apply(){
+      console.log = enabled ? origLog : function(){};
+      console.debug = enabled ? origDebug : function(){};
+    }
+    apply();
+    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+      chrome.storage.local.get('debug_mode', (res)=>{ enabled = !!res.debug_mode; apply(); });
+      if (chrome.storage.onChanged) {
+        chrome.storage.onChanged.addListener((changes, area)=>{
+          if (area === 'local' && changes.debug_mode) { enabled = !!changes.debug_mode.newValue; apply(); }
+        });
+      }
+    }
+  } catch(e){}
+})();
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const cache = new Map(); // symbol -> { fetchedAt, float, shortInterest, ctb, ftd }
 
@@ -51,9 +72,10 @@ function ensureTooltip() {
         <div class="shi-row"><span>Shares Outstanding:</span><span class="shi-shares-outstanding">—</span></div>
       </div>
       <div class="shi-section shi-financial-info">
-        <div class="shi-row"><span>Estimated Cash:</span><span class="shi-cash">—</span></div>
-        <div class="shi-row"><span>Institutional Ownership:</span><span class="shi-institutional-ownership">—</span></div>
         <div class="shi-row"><span>Market Cap:</span><span class="shi-market-cap">—</span></div>
+        <div class="shi-row"><span>Estimated Cash:</span><span class="shi-est-cash">—</span></div>
+        <div class="shi-row"><span>Est. Net Cash/Sh:</span><span class="shi-est-net-cash">—</span></div>
+        <div class="shi-row"><span>Institutional Ownership:</span><span class="shi-institutional-ownership">—</span></div>
         <div class="shi-row"><span>E/V:</span><span class="shi-enterprise-value">—</span></div>
       </div>
       <div class="shi-section shi-short-info">
@@ -66,9 +88,9 @@ function ensureTooltip() {
         <div class="shi-row"><span>Failure To Deliver (FTDs):</span><span class="shi-failure-to-deliver">—</span></div>
       </div>
       <div class="shi-section shi-company-info">
+        <div class="shi-row"><span>Country:</span><span class="shi-country">—</span></div>
         <div class="shi-row"><span>Sector:</span><span class="shi-sector">—</span></div>
         <div class="shi-row"><span>Industry:</span><span class="shi-industry">—</span></div>
-        <div class="shi-row"><span>Country:</span><span class="shi-country">—</span></div>
         <div class="shi-row"><span>Exchange:</span><span class="shi-exchange">—</span></div>
       </div>
       <div class="shi-section shi-last-update">
@@ -113,9 +135,10 @@ function showLoading(symbol, x, y) {
   safeSetText('.shi-updated', 'Loading…');
   safeSetText('.shi-float', '—');
   safeSetText('.shi-shares-outstanding', '—');
-  safeSetText('.shi-cash', '—');
-  safeSetText('.shi-institutional-ownership', '—');
   safeSetText('.shi-market-cap', '—');
+  safeSetText('.shi-est-cash', '—');
+  safeSetText('.shi-est-net-cash', '—');
+  safeSetText('.shi-institutional-ownership', '—');
   safeSetText('.shi-enterprise-value', '—');
   safeSetText('.shi-short-interest', '—');
   safeSetText('.shi-short-interest-ratio', '—');
@@ -123,10 +146,10 @@ function showLoading(symbol, x, y) {
   safeSetText('.shi-cost-to-borrow', '—');
   safeSetText('.shi-short-shares-available', '—');
   safeSetText('.shi-finra-exempt-volume', '—');
-  safeSetText('.shi-failure-to-deliver', '—');
+
+  safeSetText('.shi-country', '—');
   safeSetText('.shi-sector', '—');
   safeSetText('.shi-industry', '—');
-  safeSetText('.shi-country', '—');
   safeSetText('.shi-exchange', '—');
   safeSetText('.shi-last-data-update', '—');
   
@@ -170,6 +193,8 @@ function showData(symbol, x, y, data) {
     }
   }
 
+  console.log(data);
+
   // Basic info
   safeSetText('.shi-symbol', `$${symbol}`);
   safeSetText('.shi-updated', data?.fetchedAt
@@ -177,13 +202,15 @@ function showData(symbol, x, y, data) {
     : '');
     
   // Core financial data
-  safeSetText('.shi-float', data?.float ?? 'N/A');
-  safeSetText('.shi-shares-outstanding', data?.sharesOutstanding 
-    ? `${data.sharesOutstanding}` : 'N/A');
-  safeSetText('.shi-cash', data?.estimatedCash ? `${data.estimatedCash}M` : 'N/A');
+  safeSetText('.shi-float', data?.float + ' shares' ?? 'N/A');
+  safeSetText('.shi-shares-outstanding', data?.sharesOutstanding + ' shares' ?? 'N/A');
+  // estimatedCash may already include unit (M/B). If numeric, assume millions and append M.
+  safeSetText('.shi-est-cash', data?.estimatedCash ?? 'N/A');
   safeSetText('.shi-institutional-ownership', data?.institutionalOwnership ?? 'N/A');
-  safeSetText('.shi-market-cap', data?.marketCap ?? 'N/A');
-  safeSetText('.shi-enterprise-value', data?.enterpriseValue ?? 'N/A');
+  safeSetText('.shi-market-cap', '$' + data?.marketCap ?? 'N/A');
+  safeSetText('.shi-enterprise-value', '$' + data?.enterpriseValue ?? 'N/A');
+  // estimatedNetCashPerShare can be a string like "-24.39"; show as-is
+  safeSetText('.shi-est-net-cash', data?.estimatedNetCashPerShare ?? 'N/A');
   
   // Short interest information (from Fintel)
   safeSetText('.shi-short-interest', data?.shortInterest ?? 'N/A');
@@ -193,6 +220,7 @@ function showData(symbol, x, y, data) {
   safeSetText('.shi-short-shares-available', data?.shortSharesAvailable ?? 'N/A');
   safeSetText('.shi-finra-exempt-volume', data?.finraExemptVolume ?? 'N/A');
   safeSetText('.shi-failure-to-deliver', data?.failureToDeliver ?? 'N/A');
+  safeSetText('.shi-regsho-min-ftds', data?.regShoMinFtds + ' shares' ?? 'N/A');
   
   // Company information
   console.log(`🏢 Setting company info in popup:`);
@@ -269,8 +297,8 @@ async function fetchPack(symbol) {
   const pack = {
     fetchedAt: storedData?.lastUpdated || now,
     float: storedData?.latestFloat ? `${storedData.latestFloat}M Shares` : 'N/A',
-    sharesOutstanding: storedData?.sharesOutstanding || null,
-    estimatedCash: storedData?.estimatedCash || null,
+    sharesOutstanding: storedData?.sharesOutstanding || 'N/A',
+    estimatedCash: storedData?.estimatedCash || 'N/A',
     institutionalOwnership: storedData?.institutionalOwnership || 'N/A',
     marketCap: storedData?.marketCap || 'N/A',
     enterpriseValue: storedData?.enterpriseValue || 'N/A',

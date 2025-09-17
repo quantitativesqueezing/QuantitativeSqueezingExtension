@@ -5,6 +5,27 @@
  * service_worker.js — fetch + parse data cross-origin with host_permissions.
  * Caches per symbol for CACHE_TTL_MS.
  */
+// Debug mode guard: wrap console.log/debug based on chrome.storage.local.debug_mode
+(function initDebugGuard(){
+  try {
+    const origLog = console.log.bind(console);
+    const origDebug = (console.debug || console.log).bind(console);
+    let enabled = false;
+    function apply(){
+      console.log = enabled ? origLog : function(){};
+      console.debug = enabled ? origDebug : function(){};
+    }
+    apply();
+    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+      chrome.storage.local.get('debug_mode', (res)=>{ enabled = !!res.debug_mode; apply(); });
+      if (chrome.storage.onChanged) {
+        chrome.storage.onChanged.addListener((changes, area)=>{
+          if (area === 'local' && changes.debug_mode) { enabled = !!changes.debug_mode.newValue; apply(); }
+        });
+      }
+    }
+  } catch(e){}
+})();
 
 try {
   importScripts('dilution_tracker_simple.js');
@@ -32,9 +53,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         sendResponse({
           fetchedAt: Date.now(),
           float: 'Timeout',
-          shortInterest: 'n/a',
-          ctb: 'n/a', 
-          ftd: 'n/a'
+          shortInterest: 'N/A',
+          ctb: 'N/A', 
+          ftd: 'N/A'
         });
       }
     }, 50000); // 50 second timeout
@@ -46,10 +67,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         console.log(`📦 Service worker: fetch-pack result for ${msg.symbol}:`, result);
         sendResponse(result || {
           fetchedAt: Date.now(),
-          float: 'n/a',
-          shortInterest: 'n/a',
-          ctb: 'n/a',
-          ftd: 'n/a'
+          float: 'N/A',
+          shortInterest: 'N/A',
+          ctb: 'N/A',
+          ftd: 'N/A'
         });
       }
     }).catch(error => {
@@ -164,28 +185,54 @@ async function fetchPack(symbol) {
     });
   }
   
+  function pickFromCrawlsTop(stored, key) {
+    try {
+      if (!stored) return null;
+      if (stored[key]) return stored[key];
+      const dt = stored.pageCrawls && stored.pageCrawls.dilutiontracker;
+      if (dt) {
+        if (dt.values && Array.isArray(dt.values[key])) {
+          const occ = dt.values[key].find(v => v && v.value != null && String(v.value).trim() !== '');
+          if (occ) return occ.value;
+        }
+        if (dt.inferred && dt.inferred[key]) return dt.inferred[key];
+      }
+      const fi = stored.pageCrawls && stored.pageCrawls.fintel;
+      if (fi) {
+        if (fi.values && Array.isArray(fi.values[key])) {
+          const occ = fi.values[key].find(v => v && v.value != null && String(v.value).trim() !== '');
+          if (occ) return occ.value;
+        }
+        if (fi.inferred && fi.inferred[key]) return fi.inferred[key];
+      }
+      return null;
+    } catch { return null; }
+  }
+
   const pack = {
     fetchedAt: storedData?.lastUpdated || now,
     float: valueOrNull(floatVal),
     shortInterest: valueOrNull(siVal),
     ctb: valueOrNull(ctbVal),
-    ftd: storedData?.estimatedCash ? `$${storedData.estimatedCash}M` : valueOrNull(ftdVal),
+    ftd: storedData?.estimatedCash ? `$${storedData.estimatedCash}` : valueOrNull(ftdVal),
     // Enhanced Fintel.io fields from stored data
-    shortInterestRatio: storedData?.shortInterestRatio || 'n/a',
-    shortInterestPercentFloat: storedData?.shortInterestPercentFloat || 'n/a',
+    shortInterestRatio: storedData?.shortInterestRatio || 'N/A',
+    shortInterestPercentFloat: storedData?.shortInterestPercentFloat || 'N/A',
     costToBorrow: storedData?.costToBorrow || valueOrNull(ctbVal),
-    shortSharesAvailable: storedData?.shortSharesAvailable || 'n/a',
-    finraExemptVolume: storedData?.finraExemptVolume || 'n/a',
+    shortSharesAvailable: storedData?.shortSharesAvailable || 'N/A',
+    finraExemptVolume: storedData?.finraExemptVolume || 'N/A',
     failureToDeliver: storedData?.failureToDeliver || valueOrNull(ftdVal),
-    lastDataUpdate: storedData?.lastDataUpdate || 'n/a',
+    lastDataUpdate: storedData?.lastDataUpdate || pickFromCrawlsTop(storedData, 'lastDataUpdate') || 'N/A',
     // Additional fields from stored data
-    sharesOutstanding: storedData?.sharesOutstanding || 'n/a',
-    estimatedCash: storedData?.estimatedCash ? `$${storedData.estimatedCash}M` : 'n/a',
-    marketCap: storedData?.marketCap || 'n/a',
-    enterpriseValue: storedData?.enterpriseValue || 'n/a',
-    sector: storedData?.sector || 'n/a',
-    industry: storedData?.industry || 'n/a',
-    country: storedData?.country || 'n/a',
+    sharesOutstanding: storedData?.sharesOutstanding || 'N/A',
+    estimatedCash: storedData?.estimatedCash ? `$${storedData.estimatedCash}` : (pickFromCrawlsTop(storedData, 'estimatedCash') ? `$${pickFromCrawlsTop(storedData, 'estimatedCash')}` : 'N/A'),
+    marketCap: storedData?.marketCap || pickFromCrawlsTop(storedData, 'marketCap') || 'N/A',
+    enterpriseValue: storedData?.enterpriseValue || pickFromCrawlsTop(storedData, 'enterpriseValue') || 'N/A',
+    sector: storedData?.sector || pickFromCrawlsTop(storedData, 'sector') || 'N/A',
+    industry: storedData?.industry || pickFromCrawlsTop(storedData, 'industry') || 'N/A',
+    country: storedData?.country || pickFromCrawlsTop(storedData, 'country') || 'N/A',
+    exchange: storedData?.exchange || pickFromCrawlsTop(storedData, 'exchange') || 'N/A',
+    institutionalOwnership: storedData?.institutionalOwnership || pickFromCrawlsTop(storedData, 'institutionalOwnership') || 'N/A',
     regularMarketChange: storedData?.regularMarketChange || null,
     extendedMarketChange: storedData?.extendedMarketChange || null
   };
@@ -397,7 +444,7 @@ function normalizeFloat(s) {
 }
 
 function humanNumber(n) {
-  if (!isFinite(n)) return 'n/a';
+  if (!isFinite(n)) return 'N/A';
   if (n >= 1e12) return (n / 1e12).toFixed(2) + 'T';
   if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
   if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';

@@ -281,7 +281,7 @@
                 
                 if (element) {
                     const value = element.textContent.trim();
-                    if (value && value !== '—' && value !== 'n/a') {
+                    if (value && value !== '—' && value !== 'N/A') {
                         checkDiv.className = 'field-check found';
                         checkDiv.textContent = `${name}: "${value}" ✅`;
                         log(`✅ ${name}: "${value}"`);

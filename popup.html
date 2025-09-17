@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>QSI: Page Data</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font: 12px/1.4 -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif; margin: 0; }
+    .wrap { width: 768px; max-height: 1500px; height: 100%; overflow: auto; padding: 12px; }
+    .row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .small { font-size: 11px; opacity: 0.8; }
+    .badge { padding: 2px 6px; border-radius: 999px; background: #e5e7eb; color: #111827; }
+    @media (prefers-color-scheme: dark) {
+      .badge { background: #374151; color: #e5e7eb; }
+    }
+    button { padding: 4px 8px; border-radius: 6px; border: 1px solid #d1d5db; background: #f9fafb; cursor: pointer; }
+    @media (prefers-color-scheme: dark) {
+      button { border-color: #4b5563; background: #1f2937; color: #e5e7eb; }
+    }
+    details { margin: 6px 0; }
+    pre { white-space: pre-wrap; word-break: break-word; }
+    .key { font-weight: 600; }
+    .muted { opacity: 0.7; }
+    .err { color: #dc2626; }
+
+    /* Tables */
+    table { width: 100%; border-collapse: collapse; margin: 8px 0; }
+    th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid rgba(0,0,0,0.08); }
+    th { font-weight: 600; background: rgba(0,0,0,0.04); position: initial; top: 0; }
+    tbody tr:hover { background: rgba(0,0,0,0.03); }
+    @media (prefers-color-scheme: dark) {
+      th, td { border-bottom-color: rgba(255,255,255,0.08); }
+      th { background: rgba(255,255,255,0.06); }
+      tbody tr:hover { background: rgba(255,255,255,0.04); }
+    }
+
+    .grid2 { display: grid; grid-template-columns: 160px 1fr; gap: 6px 10px; }
+    .grid2 .k { font-weight: 600; opacity: .9; }
+    .grid2 .v { word-break: break-word; }
+    .section-title { font-weight: 600; margin: 10px 0 4px; }
+
+    /* Host sections */
+    .host-section { margin: 14px 0 18px; }
+    /* host-header removed; reuse its visual style on the meta card */
+    .host-card {
+      background: linear-gradient(90deg, #eef2ff, #f8fafc);
+      border-color: #e5e7eb;
+    }
+    @media (prefers-color-scheme: dark) {
+      .host-card { background: linear-gradient(90deg, #0b1220, #0f172a); border-color: #1f2937; }
+    }
+
+    .card { border: 1px solid rgba(0,0,0,.08); border-radius: 8px; padding: 8px 10px; margin: 8px 0; }
+    @media (prefers-color-scheme: dark) { .card { border-color: rgba(255,255,255,.1); } }
+    .table-title { font-weight: 600; margin-top: 6px; margin-bottom: 4px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="row" style="align-items:center">
+      <label style="display:flex; align-items:center; gap:6px; font-size:12px;">
+        <input type="checkbox" id="debugToggle" />
+        <span>Debug Mode</span>
+      </label>
+      <div id="status" class="small" style="margin-left:8px;">Loading…</div>
+      <div style="flex:1"></div>
+      <button id="refresh">Refresh</button>
+      <button id="cleanup">Clean</button>
+      <button id="copy">JSON</button>
+    </div>
+    <div class="row small">
+      <div>URL:</div>
+      <div id="url" class="mono" style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></div>
+    </div>
+    <div class="row small">
+      <div>Ticker:</div>
+      <div id="ticker" class="badge mono">—</div>
+    </div>
+    <div id="content"></div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

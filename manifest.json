@@ -9,7 +9,7 @@
     "48": "icons/48.png",
     "128": "icons/128.png"
   },
-  "permissions": ["storage"],
+  "permissions": ["storage", "tabs"],
   "host_permissions": [
     "https://finviz.com/*",
     "https://fintel.io/*",
@@ -42,6 +42,7 @@
     }
   ],
   "action": {
-    "default_title": "Quantitative Squeezing Insights"
+    "default_title": "Quantitative Squeezing Insights",
+    "default_popup": "popup.html"
   }
 }

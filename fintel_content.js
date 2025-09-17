@@ -5,6 +5,27 @@
  * Content script for fintel.io pages
  * Extracts Short Interest, Cost to Borrow, FTD, and other short metrics
  */
+// Debug mode guard: wrap console.log/debug based on chrome.storage.local.debug_mode
+(function initDebugGuard(){
+  try {
+    const origLog = console.log.bind(console);
+    const origDebug = (console.debug || console.log).bind(console);
+    let enabled = false;
+    function apply(){
+      console.log = enabled ? origLog : function(){};
+      console.debug = enabled ? origDebug : function(){};
+    }
+    apply();
+    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+      chrome.storage.local.get('debug_mode', (res)=>{ enabled = !!res.debug_mode; apply(); });
+      if (chrome.storage.onChanged) {
+        chrome.storage.onChanged.addListener((changes, area)=>{
+          if (area === 'local' && changes.debug_mode) { enabled = !!changes.debug_mode.newValue; apply(); }
+        });
+      }
+    }
+  } catch(e){}
+})();
 
 console.log('🔍 Fintel content script loaded');
 
@@ -19,11 +40,16 @@ if (tickerMatch) {
   // Wait for page to load and extract data
   setTimeout(() => {
     extractFintelData(ticker);
+    // Also run generic page crawler storing all label/value + tables
+    setTimeout(() => crawlAndStoreStructuredPageData(ticker, 'fintel'), 800);
   }, 3000); // Wait 3 seconds for dynamic content
   
   // Also set up observer for dynamic content changes
   const observer = new MutationObserver(() => {
     extractFintelData(ticker);
+    // Debounced crawl on DOM changes
+    clearTimeout(window.__qseFintelCrawlTimer);
+    window.__qseFintelCrawlTimer = setTimeout(() => crawlAndStoreStructuredPageData(ticker, 'fintel'), 700);
   });
   
   observer.observe(document.body, {
@@ -53,10 +79,7 @@ async function extractFintelData(ticker) {
     if (fintelData && Object.keys(fintelData).length > 0) {
       console.log('📊 Parsed Fintel data:', fintelData);
       
-      // Add green text highlighting for verified data (with slight delay to ensure DOM is ready)
-      setTimeout(() => {
-        addFintelGreenTextHighlighting(ticker, fintelData);
-      }, 500);
+      // Old label-based highlighting disabled; we now highlight by crawled values
       
       // Check if data has changed before storing
       await storeFintelDataIfChanged(ticker, fintelData);
@@ -64,11 +87,7 @@ async function extractFintelData(ticker) {
       console.log('❌ Could not parse Fintel data from page');
     }
 
-    // Independently highlight the Short Interest VALUE in green when present
-    // This runs regardless of stored/parsed data so users get immediate visual cue
-    setTimeout(() => {
-      try { highlightShortInterestValueGreen(); } catch (e) { console.warn('SI value highlight error', e); }
-    }, 100);
+    // Value highlighting removed by request
     
   } catch (error) {
     console.error('❌ Error extracting Fintel data:', error);
@@ -79,69 +98,542 @@ async function extractFintelData(ticker) {
  * Find "Short Interest" on the page and color just the VALUE in green.
  * Handles common Fintel layouts: tables (label/value in cells) and inline text "Short Interest: <value>".
  */
-function highlightShortInterestValueGreen() {
-  const GREEN = 'rgb(34, 197, 94)';
 
+/**
+ * Crawl entire page for label/value pairs and tables into normalized JSON
+ * and store under ticker in chrome.storage.local.
+ */
+async function crawlAndStoreStructuredPageData(ticker, hostKey = 'fintel') {
   try {
-    // 1) Table layout: label in one cell, value in the next
-    const rows = document.querySelectorAll('tr');
-    rows.forEach(row => {
-      const cells = Array.from(row.querySelectorAll('th,td'));
-      cells.forEach((cell, idx) => {
-        const label = (cell.textContent || '').trim();
-        if (/^\s*short\s*interest\s*$/i.test(label) || /short\s*interest/i.test(label)) {
-          const valueCell = cells[idx + 1];
-          if (valueCell && !valueCell.hasAttribute('data-qse-green-si-value')) {
-            valueCell.style.color = GREEN;
-            valueCell.style.fontWeight = '500';
-            valueCell.setAttribute('data-qse-green-si-value', 'true');
-            valueCell.title = 'Short Interest value';
-          }
-        }
+    const data = buildStructuredPageData();
+    if (!data) return;
+
+    // Attach meta and host key
+    data.meta = {
+      url: location.href,
+      title: document.title,
+      crawledAt: new Date().toISOString(),
+      host: hostKey
+    };
+
+    // Final cleanup: drop any blacklisted values/tables
+    purgeBlacklistedFromStructured(data);
+
+    // Store under ticker
+    const storageKey = `ticker_${ticker}`;
+    const current = await chrome.storage.local.get(storageKey);
+    const existing = current[storageKey] || {};
+    // Clean existing object from blacklisted keys as well
+    purgeBlacklistedFromObject(existing);
+    const pageCrawls = existing.pageCrawls || {};
+    pageCrawls[hostKey] = data;
+
+    // Optionally surface a few canonical fields at top-level when present
+    const inferred = data.inferred || {};
+    const merged = { ...existing, pageCrawls, lastUpdated: Date.now(), ...inferred };
+
+    await chrome.storage.local.set({ [storageKey]: merged });
+    console.log(`💾 Stored structured crawl for ${ticker} (${hostKey})`, data, merged);
+
+    // Highlighting removed by request
+  } catch (e) {
+    console.warn('crawlAndStoreStructuredPageData error:', e);
+  }
+}
+
+function purgeBlacklistedFromStructured(data) {
+  try {
+    if (!data) return;
+    if (data.values) {
+      Object.keys(data.values).forEach(k => {
+        if (isBlacklistedKey(k)) delete data.values[k];
       });
+    }
+    if (Array.isArray(data.tables)) {
+      data.tables = data.tables.filter(t => {
+        const name = (t?.name || t?.key || '').toString();
+        if (isBlacklistedTableName(name)) return false;
+        // Drop empty tables titled "values"/"Values"
+        const norm = name.trim().toLowerCase();
+        if (norm === 'values' && isTableEffectivelyEmpty(t)) return false;
+        return true;
+      });
+    }
+    if (data.inferred) {
+      Object.keys(data.inferred).forEach(k => {
+        if (isBlacklistedKey(k)) delete data.inferred[k];
+      });
+    }
+  } catch {}
+}
+
+function purgeBlacklistedFromObject(obj) {
+  try {
+    if (!obj || typeof obj !== 'object') return;
+    Object.keys(obj).forEach(k => {
+      if (isBlacklistedKey(k)) delete obj[k];
+    });
+    if (obj.pageCrawls && obj.pageCrawls.fintel) {
+      purgeBlacklistedFromStructured(obj.pageCrawls.fintel);
+    }
+  } catch {}
+}
+
+function isTableEffectivelyEmpty(t) {
+  try {
+    if (!t || !Array.isArray(t.rows)) return true;
+    if (t.rows.length === 0) return true;
+    // If none of the rows has any non-empty cell, consider it empty
+    const hasAny = t.rows.some(row => {
+      if (!row || typeof row !== 'object') return false;
+      return Object.values(row).some(v => String(v ?? '').trim().length > 0);
+    });
+    return !hasAny;
+  } catch { return false; }
+}
+
+function buildStructuredPageData() {
+  try {
+    const values = {}; // key -> [{label,value,source,selector,heading}]
+    const tables = []; // {key,name,id,class,headers,rows}
+
+    // Helper to normalize keys and push occurrences
+    function pushKV(label, value, source, el) {
+      const key = canonicalKeyForLabel(label);
+      if (!key) return;
+      // Drop unwanted field names like Title
+      if (key === 'title' || /^\s*title\s*$/i.test(String(label))) return;
+
+      const cleanVal = sanitizeValueForStorage(String(value), key);
+      if (!shouldKeepPair(key, String(label), cleanVal)) return;
+      if (!values[key]) values[key] = [];
+      const heading = findNearestHeading(el);
+      values[key].push({ label: String(label).trim(), value: cleanVal, rawValue: String(value), source, selector: cssPath(el), heading });
+    }
+
+    // 1) Definition lists
+    document.querySelectorAll('dl').forEach(dl => {
+      const items = dl.querySelectorAll('dt, dd');
+      for (let i = 0; i < items.length; i++) {
+        const dt = items[i];
+        if (dt.tagName !== 'DT') continue;
+        const dd = items[i + 1];
+        if (dd && dd.tagName === 'DD') {
+          const label = dt.textContent?.trim();
+          const value = dd.textContent?.trim();
+          if (label && value) pushKV(label, value, 'dl', dd);
+        }
+      }
     });
 
-    // 2) Inline text layout: "Short Interest: 167,565,108 shares"
-    const re = /Short\s*Interest\s*[:\-–—]?\s*([\d.,]+\s*(?:[KMB]\b)?\s*(?:shares|shrs)?)(?!\s*%)/i;
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
-    let node;
-    while ((node = walker.nextNode())) {
-      const text = node.nodeValue || '';
-      if (!/short\s*interest/i.test(text)) continue;
+    // 2) Tables (th/td or two-cell rows)
+    const allowedIds = new Set([
+      'short-shares-availability-table',
+      'table-short-borrow-rate',
+      'fails-to-deliver-table',
+      'short-sale-volume-finra-table',
+      'short-sale-volume-combined-table',
+      'short-interest-daily-nasdaq-table',
+      'short-interest-nasdaq-table'
+    ]);
+
+    document.querySelectorAll('table').forEach((table) => {
+      // Only keep whitelisted tables by id
+      const id = (table.getAttribute('id') || '').trim();
+      if (!id || !allowedIds.has(id)) return;
+      const t = extractTable(table, tables.length);
+      if (t && t.rows && t.rows.length) {
+        // Also filter out blacklisted table names by heading/name
+        const name = (t.name || '').toString();
+        const key = (t.key || '').toString();
+        if (isBlacklistedTableName(name) || isBlacklistedTableName(key)) return;
+        tables.push(t);
+      }
+
+      // Also treat simple two-column tables as label/value
+      // Do not auto-treat rows as label/value for non-whitelisted tables (filtered above)
+    });
+
+    // 3) Inline "Label: Value" pairs within blocks
+    const blocks = document.querySelectorAll('p,li,div,section,span');
+    const re = /^\s*([A-Za-z][A-Za-z0-9 .%/()&-]{1,40})\s*[:\-–—]\s*(.+)$/;
+    blocks.forEach(el => {
+      const text = el.childElementCount ? null : el.textContent; // avoid large containers
+      if (!text) return;
       const m = text.match(re);
-      if (m && m[1]) {
-        const valueText = m[1];
-        const fullMatch = m[0];
-        const valueOffsetInMatch = fullMatch.indexOf(valueText);
-        const absStart = m.index + valueOffsetInMatch;
-        const absEnd = absStart + valueText.length;
+      if (!m) return;
+      const label = m[1];
+      const value = m[2];
+      if (isLikelyLabel(label) && value) pushKV(label, value, 'inline', el);
+    });
 
-        const before = text.slice(0, absStart);
-        const after = text.slice(absEnd);
-
-        // Skip if parent already processed
-        const parent = node.parentNode;
-        if (!parent || parent.nodeType !== 1) continue;
-        if (parent.hasAttribute && parent.hasAttribute('data-qse-green-si-inline')) continue;
-
-        const beforeNode = document.createTextNode(before);
-        const span = document.createElement('span');
-        span.textContent = valueText;
-        span.style.color = GREEN;
-        span.style.fontWeight = '500';
-        span.setAttribute('data-qse-green-si-value', 'true');
-        const afterNode = document.createTextNode(after);
-
-        parent.insertBefore(beforeNode, node);
-        parent.insertBefore(span, node);
-        parent.insertBefore(afterNode, node);
-        parent.removeChild(node);
-        parent.setAttribute('data-qse-green-si-inline', 'true');
+    // Build inferred canonical single-value object (pick first occurrence of known keys)
+    const inferred = {};
+    const preferKeys = [
+      'shortInterest','shortInterestRatio','shortInterestPercentFloat','costToBorrow',
+      'shortSharesAvailable','finraExemptVolume','failureToDeliver','float','sharesOutstanding',
+      'sector','industry','country','exchange','marketCap','enterpriseValue','lastDataUpdate'
+    ];
+    for (const k of preferKeys) {
+      if (values[k] && values[k].length) {
+        const v = values[k][0].value;
+        inferred[k] = transformFieldForStorage(k, v);
       }
     }
-  } catch (err) {
-    console.warn('highlightShortInterestValueGreen error:', err);
+
+    return { values, tables, inferred };
+  } catch (e) {
+    console.warn('buildStructuredPageData error:', e);
+    return null;
   }
+}
+
+function extractTable(table, index = 0) {
+  const headers = [];
+  let headerRow = table.querySelector('thead tr') || table.querySelector('tr');
+  if (headerRow) {
+    headerRow.querySelectorAll('th,td').forEach(h => headers.push(cleanText(h.textContent)));
+  }
+  const rows = [];
+  const bodyRows = table.querySelectorAll('tbody tr');
+  const dataRows = bodyRows.length ? bodyRows : table.querySelectorAll('tr');
+  dataRows.forEach((row, idx) => {
+    if (row === headerRow) return;
+    const cells = row.querySelectorAll('td,th');
+    if (!cells.length) return;
+    const obj = {};
+    cells.forEach((cell, i) => {
+      const key = headers[i] || `col_${i}`;
+      obj[key] = cleanText(cell.textContent);
+    });
+    // Prune explanation-only rows: drop cells that are not value-like and keep dates
+    const pruned = {};
+    Object.entries(obj).forEach(([h, v]) => {
+      if (isUsefulTableCell(h, v)) pruned[h] = v;
+    });
+    const hasAny = Object.keys(pruned).length > 0;
+    // Drop rows that are labeled with blacklisted labels like Update Frequency, Source, etc.
+    const isBlacklisted = hasAny && isBlacklistedRow(pruned, headers);
+    if (hasAny && !isBlacklisted) rows.push(pruned);
+  });
+  const name = table.getAttribute('id') || table.getAttribute('aria-label') || table.getAttribute('data-name') || findNearestHeading(table) || `table_${index}`;
+  const key = normalizeKey(name);
+  return { key, name, id: table.id || null, class: table.className || null, headers, rows };
+}
+
+function isBlacklistedTableName(name) {
+  const n = String(name || '').toLowerCase().trim();
+  const norm = n.replace(/[^a-z0-9]+/g, '');
+  const set = new Set([
+    'updatefrequency',
+    'thissectionusestheofficialnasdaq',
+    'startminmaxlatestborrowrates',
+    'source',
+    'finratotalvolume',
+    'finrashortvolumeratio',
+    'finrashortvolume',
+    'shortsalevolumecombinedtable'
+  ]);
+  return set.has(norm);
+}
+
+function isBlacklistedRow(row, headers) {
+  // Try to detect a label cell (first header) or scan all values
+  const bl = new Set([
+    'updatefrequency',
+    'thissectionusestheofficialnasdaq',
+    'startminmaxlatestborrowrates',
+    'source',
+    'finratotalvolume',
+    'finrashortvolumeratio',
+    'finrashortvolume'
+  ]);
+
+  // Check first column if available
+  const firstHeader = Array.isArray(headers) && headers.length ? headers[0] : null;
+  if (firstHeader && row[firstHeader]) {
+    const norm = String(row[firstHeader]).toLowerCase().replace(/[^a-z0-9]+/g, '');
+    if (bl.has(norm)) return true;
+  }
+  // Scan any short textual value that matches blacklist exactly
+  for (const val of Object.values(row)) {
+    const s = String(val).trim();
+    if (!s) continue;
+    if (/\d/.test(s)) continue; // likely a data value
+    const norm = s.toLowerCase().replace(/[^a-z0-9]+/g, '');
+    if (bl.has(norm)) return true;
+  }
+  return false;
+}
+
+function canonicalKeyForLabel(label) {
+  const raw = String(label).trim().toLowerCase();
+  const map = {
+    'short interest': 'Short Interest',
+    'short interest ratio': 'shortInterestRatio',
+    'short ratio': 'shortInterestRatio',
+    'days to cover': 'Days to Cover',
+    'short interest % float': 'Short Float %',
+    'short interest % of float': 'Short Float %',
+    'short % float': 'Short Float %',
+    'cost to borrow': 'Cost to Borrow (IBKR)',
+    'borrow rate': 'Cost to Borrow (IBKR)',
+    'borrow fee': 'Cost to Borrow (IBKR)',
+    'ctb': 'Cost to Borrow (IBKR)',
+    'short shares available': 'Short Shares Available (IBKR)',
+    'shares available': 'Short Shares Available (IBKR)',
+    'available shares': 'Short Shares Available (IBKR)',
+    'short-exempt volume': 'Short-Exempt Volume',
+    'exempt volume': 'Short-Exempt Volume',
+    'finra exempt volume': 'Short-Exempt Volume',
+    'regulation sho exempt': 'Short-Exempt Volume',
+    'failure to deliver': 'Failure to Deliver (FTDs)',
+    'fails to deliver': 'Failure to Deliver (FTDs)',
+    'ftd': 'Failure to Deliver (FTDs)',
+    'float': 'Free Float',
+    'free float': 'Free Float',
+    'shares outstanding': 'Shares Outstanding',
+    'outstanding shares': 'Shares Outstanding',
+    'sector': 'Sector',
+    'industry': 'Industry',
+    'country': 'Country',
+    'exchange': 'Exchange',
+    'market cap': 'Market Cap',
+    'mkt cap': 'Market Cap',
+    'enterprise value': 'E/V',
+    'ev': 'E/V',
+    'last update': 'Last Updated',
+    'data as of': 'Last Updated',
+    'as of': 'Last Updated'
+  };
+  if (map[raw]) return map[raw];
+  return normalizeKey(raw);
+}
+
+function normalizeKey(s) {
+  return String(s)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/ (\w)/g, (_, c) => c.toUpperCase()); // camelCase-ish
+}
+
+function isLikelyLabel(s) {
+  const t = String(s).trim();
+  if (!t) return false;
+  if (/\d{2,}/.test(t)) return false; // lots of digits not a label
+  return /[A-Za-z]/.test(t) && t.length <= 48;
+}
+
+function cleanText(s) {
+  return (s || '').replace(/\s+/g, ' ').trim();
+}
+
+// Decide whether to keep a label/value pair
+function shouldKeepPair(key, label, value) {
+  if (!value) return false;
+  const k = String(key).toLowerCase();
+  // never store Title field in values
+  if (k === 'title') return false;
+  // blacklist unwanted keys
+  if (isBlacklistedKey(k) || isBlacklistedKey(label)) return false;
+  // allow select textual fields
+  const allowedTextKeys = new Set(['sector','industry','country','exchange','description','marketCap','enterpriseValue','institutionalOwnership','lastDataUpdate']);
+  if (allowedTextKeys.has(k)) {
+    if (k === 'description') return true; // description allowed as-is (sanitized earlier)
+    // other textual: keep short, non-sentence values
+    return !isLikelyExplanationText(value);
+  }
+  // numeric or unit-like values
+  if (isValueLike(value)) return true;
+  return false;
+}
+
+function isLikelyExplanationText(s) {
+  const v = String(s).trim();
+  if (v.length > 140) return true;
+  const sentences = v.split(/[.!?]/).filter(x => x.trim().length);
+  if (sentences.length >= 2 && v.length > 80) return true;
+  // heuristics for explanatory phrases
+  if (/\b(this\s+number|provided\s+by|that\s+were|number\s+of\s+short\s+shares|included\s+in)\b/i.test(v)) return true;
+  return false;
+}
+
+function isValueLike(s) {
+  const v = String(s).trim();
+  if (!v) return false;
+  if (/\d/.test(v)) return true; // contains digits
+  if (/[%$]/.test(v)) return true;
+  if (/\b(shares?|days?|volume|rate|float|borrow|exempt|deliver|ftd)\b/i.test(v)) return true;
+  // short single tokens
+  if (v.length <= 24 && /^[A-Za-z][A-Za-z &-]*$/.test(v)) return true;
+  return false;
+}
+
+function isUsefulTableCell(header, value) {
+  const h = String(header || '').toLowerCase();
+  if (isBlacklistedKey(h)) return false;
+  if (/date|time|settlement|as of/.test(h)) return true;
+  if (/label|description|notes?/.test(h)) return false;
+  if (isLikelyExplanationText(value)) return false;
+  return isValueLike(value);
+}
+
+// Sanitize values for storage: collapse exotic spaces/zero-width; allow rich spacing only for description
+function sanitizeValueForStorage(val, key) {
+  try {
+    if (!val) return '';
+    let s = String(val);
+    // Unicode normalize
+    if (s.normalize) s = s.normalize('NFKC');
+    // Remove zero-width characters
+    s = s.replace(/[\u200B-\u200D\uFEFF]/g, '');
+    // Replace non-breaking and various unicode spaces with normal space
+    s = s.replace(/[\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000]/g, ' ');
+    if (key === 'description') {
+      // Keep user-facing spacing; just trim ends
+      return s.trim();
+    }
+    // Collapse whitespace
+    s = s.replace(/\s+/g, ' ').trim();
+    // Field-specific normalization
+    return normalizeFieldValue(key, s);
+  } catch {
+    return String(val).trim();
+  }
+}
+
+// Field-specific transforms for inferred storage
+function transformFieldForStorage(key, value) {
+  if (key === 'shortInterest') {
+    const n = parseShareCount(value);
+    return Number.isFinite(n) ? n : value;
+  }
+  if (key === 'shortInterestPercentFloat') {
+    const p = extractPercent(value);
+    return p || value;
+  }
+  if (key === 'finraExemptVolume' || key === 'finraNonExemptVolume') {
+    const v = extractSharesCount(value);
+    return v || value;
+  }
+  return value;
+}
+
+// Parse counts like "167,565,108 shares", "167.6M", "150K" into integer
+function parseShareCount(input) {
+  if (input == null) return NaN;
+  let s = String(input).trim();
+  // Remove unit words
+  s = s.replace(/shares?|shrs?/ig, '').trim();
+  // Match number with optional unit
+  const m = s.match(/^([\d.,]+)\s*([KMB])?$/i);
+  if (!m) {
+    // Try to extract first number chunk
+    const m2 = s.match(/([\d][\d.,]*)/);
+    if (!m2) return NaN;
+    return parseInt(m2[1].replace(/,/g, ''), 10);
+  }
+  const num = parseFloat(m[1].replace(/,/g, ''));
+  if (!isFinite(num)) return NaN;
+  const unit = (m[2] || '').toUpperCase();
+  const mult = unit === 'B' ? 1e9 : unit === 'M' ? 1e6 : unit === 'K' ? 1e3 : 1;
+  return Math.round(num * mult);
+}
+
+// Blacklist for unwanted keys/labels/headers
+function isBlacklistedKey(name) {
+  const n = String(name || '').toLowerCase().trim();
+  const norm = n.replace(/[^a-z0-9]+/g, '');
+  const set = new Set([
+    'offexchangeshortvolume',
+    'offexchangeshortvolumeratio',
+    'psxbxshortvolume',
+    'aggregatetotalvolume',
+    'aggregateshortvolume',
+    'aggregateshortvolumeratio',
+    'cboeshortvolume',
+    'offexchangeshortvolume',
+    'source',
+    'startminmaxlatestborrowrates',
+    'thissectionusestheofficialnasdaq',
+    'updatefrequency',
+    'check', 'ki', 'mutwor', 'rlhdt', 'type',
+    'values' // stray Values blob with non-data tokens
+  ]);
+  return set.has(norm);
+}
+
+// Normalize specific fields by extracting numeric/units only
+function normalizeFieldValue(key, value) {
+  const k = String(key || '').toLowerCase();
+  if (k === 'shortinterestpercentfloat') {
+    const p = extractPercent(value);
+    return p || value;
+  }
+  if (k === 'finraexemptvolume' || k === 'finranonexemptvolume') {
+    const v = extractSharesCount(value);
+    return v || value;
+  }
+  return value;
+}
+
+function extractPercent(s) {
+  const m = String(s).match(/([\d.,]+)\s*%/);
+  if (!m) return null;
+  const num = m[1].replace(/\s/g, '');
+  return `${num}%`;
+}
+
+function extractSharesCount(s) {
+  const txt = String(s);
+  const m = txt.match(/([\d.,]+)\s*([KMB])?\s*(shares?)?/i);
+  if (!m) return null;
+  let val = m[1].trim();
+  if (m[2]) val = `${val}${m[2].toUpperCase()}`;
+  if (m[3]) val = `${val} shares`;
+  return val;
+}
+
+function findNearestHeading(el) {
+  const headingSel = 'h1,h2,h3,h4,h5,h6';
+  let cur = el;
+  for (let i = 0; i < 5 && cur; i++) {
+    // Look backwards among siblings for a heading
+    let p = cur.previousElementSibling;
+    while (p) {
+      if (p.matches && p.matches(headingSel)) return cleanText(p.textContent);
+      p = p.previousElementSibling;
+    }
+    cur = cur.parentElement;
+  }
+  return null;
+}
+
+function cssPath(el) {
+  try {
+    if (!(el instanceof Element)) return '';
+    const path = [];
+    while (el && el.nodeType === Node.ELEMENT_NODE) {
+      let selector = el.nodeName.toLowerCase();
+      if (el.id) {
+        selector += `#${el.id}`;
+        path.unshift(selector);
+        break;
+      } else {
+        let sib = el;
+        let nth = 1;
+        while ((sib = sib.previousElementSibling)) {
+          if (sib.nodeName.toLowerCase() === selector) nth++;
+        }
+        selector += `:nth-of-type(${nth})`;
+      }
+      path.unshift(selector);
+      el = el.parentNode;
+    }
+    return path.join(' > ');
+  } catch { return ''; }
 }
 
 /**
@@ -265,49 +757,47 @@ function extractFromSpecificTables() {
   const result = {};
   
   try {
+    // Whitelist of allowed table IDs
+    const allowedIds = [
+      'short-shares-availability-table',
+      'table-short-borrow-rate',
+      'fails-to-deliver-table',
+      'short-sale-volume-finra-table',
+      'short-interest-daily-nasdaq-table',
+      'short-interest-nasdaq-table'
+    ];
+
     // Extract from #short-shares-availability-table (recent 3 rows only)
     const shortSharesTable = document.querySelector('#short-shares-availability-table');
     if (shortSharesTable) {
       result.shortSharesAvailabilityTable = extractShortSharesAvailabilityData(shortSharesTable);
       console.log('✅ Extracted short shares availability table data (recent 3 rows)');
     }
-    
+
     // Extract from #table-short-borrow-rate
     const borrowRateTable = document.querySelector('#table-short-borrow-rate');
     if (borrowRateTable) {
       result.shortBorrowRateTable = extractTableData(borrowRateTable, 'Short Borrow Rate');
       console.log('✅ Extracted short borrow rate table data');
     }
-    
+
     // Extract from #fails-to-deliver-table
     const ftdTable = document.querySelector('#fails-to-deliver-table');
     if (ftdTable) {
       result.failsToDeliverTable = extractTableData(ftdTable, 'Fails to Deliver');
       console.log('✅ Extracted fails to deliver table data');
     }
-    
-    // Also look for these tables by partial class names if IDs don't work
-    if (!shortSharesTable) {
-      const altShortTable = document.querySelector('table[class*="short"], table[class*="availability"]');
-      if (altShortTable && altShortTable.textContent.toLowerCase().includes('short')) {
-        result.shortSharesAvailabilityTable = extractTableData(altShortTable, 'Short Shares (alt)');
-      }
+
+    // Extract allowed short sale volume and NASDAQ short interest tables
+    const finraVol = document.querySelector('#short-sale-volume-finra-table');
+    if (finraVol) {
+      result.shortSaleVolumeFinraTable = extractTableData(finraVol, 'Short Sale Volume (FINRA)');
+      console.log('✅ Extracted FINRA short sale volume table');
     }
-    
-    if (!borrowRateTable) {
-      const altBorrowTable = document.querySelector('table[class*="borrow"], table[class*="rate"]');
-      if (altBorrowTable && altBorrowTable.textContent.toLowerCase().includes('borrow')) {
-        result.shortBorrowRateTable = extractTableData(altBorrowTable, 'Borrow Rate (alt)');
-      }
-    }
-    
-    if (!ftdTable) {
-      const altFtdTable = document.querySelector('table[class*="ftd"], table[class*="fail"]');
-      if (altFtdTable && altFtdTable.textContent.toLowerCase().includes('fail')) {
-        result.failsToDeliverTable = extractTableData(altFtdTable, 'FTD (alt)');
-      }
-    }
-    
+
+    // Note: We still capture NASDAQ short interest tables via structured crawl,
+    // but we don't inject them into named result fields here (hidden from summary/UI).
+  
   } catch (error) {
     console.error('❌ Error extracting from specific tables:', error);
   }
@@ -597,8 +1087,13 @@ function extractFromTables() {
           
           const field = labelMappings[label];
           if (field && value && !result[field]) {
-            result[field] = cleanValue(value);
-            console.log(`✅ Found ${field} in table: ${result[field]}`);
+            const cleaned = cleanValue(value);
+            if (shouldKeepPair(field, label, cleaned)) {
+              result[field] = cleaned;
+              console.log(`✅ Found ${field} in table: ${result[field]}`);
+            } else {
+              console.log(`⚠️ Skipping non-value content for ${field}`);
+            }
           }
         }
       });
@@ -630,65 +1125,7 @@ function cleanValue(value) {
  * @param {string} ticker - Stock ticker
  * @param {Object} currentData - Currently extracted Fintel data
  */
-async function addFintelGreenTextHighlighting(ticker, currentData) {
-  try {
-    // Check if chrome.storage is available
-    if (!chrome || !chrome.storage) {
-      console.error('❌ Chrome storage API not available');
-      return;
-    }
-
-    // Get existing stored data
-    const result = await chrome.storage.local.get(`ticker_${ticker}`);
-    const storedData = result[`ticker_${ticker}`];
-    
-    // If no stored data, this is first time crawling - highlight all values
-    const isFirstTime = !storedData;
-    
-    console.log(`🟢 Adding Fintel green text highlighting for ${ticker} (first time: ${isFirstTime})`);
-    
-    // Define fields to check and their comparison functions
-    const fieldsToCheck = [
-      { field: 'shortInterest', compareValue: true },
-      { field: 'shortInterestRatio', compareValue: true },
-      { field: 'shortInterestPercentFloat', compareValue: true },
-      { field: 'costToBorrow', compareValue: true },
-      { field: 'failureToDeliver', compareValue: true },
-      { field: 'shortSharesAvailable', compareValue: true },
-      { field: 'shortExemptVolume', compareValue: true },
-      { field: 'finraExemptVolume', compareValue: true }
-    ];
-    
-    // Add green highlighting for each field
-    fieldsToCheck.forEach(({ field, compareValue }) => {
-      const currentValue = currentData[field];
-      const storedValue = storedData?.[field];
-      
-      if (currentValue && (isFirstTime || (compareValue && storedValue === currentValue))) {
-        addFintelGreenTextToElement(document.body, field, currentValue);
-      }
-    });
-    
-    // Handle table data separately
-    const tableFields = ['shortSharesAvailabilityTable', 'shortBorrowRateTable', 'failsToDeliverTable'];
-    tableFields.forEach(tableField => {
-      if (currentData[tableField] && Array.isArray(currentData[tableField])) {
-        const currentRows = currentData[tableField].length;
-        const storedRows = storedData?.[tableField]?.length || 0;
-        
-        if (isFirstTime || currentRows === storedRows) {
-          const tableId = tableField.replace('Table', '').replace(/([A-Z])/g, '-$1').toLowerCase().replace(/^-/, '');
-          addGreenTextToTable(tableId);
-        }
-      }
-    });
-    
-    console.log(`🟢 Fintel green text highlighting added for ${ticker}`);
-    
-  } catch (error) {
-    console.error('❌ Error adding Fintel green text highlighting:', error);
-  }
-}
+async function addFintelGreenTextHighlighting() { return; }
 
 /**
  * Add green text highlighting to Fintel data elements

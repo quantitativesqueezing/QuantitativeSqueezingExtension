@@ -5,6 +5,27 @@
  * Content script for dilutiontracker.com pages
  * Extracts Float & OS data from company pages and stores in extension storage
  */
+// Debug mode guard: wrap console.log/debug based on chrome.storage.local.debug_mode
+(function initDebugGuard(){
+  try {
+    const origLog = console.log.bind(console);
+    const origDebug = (console.debug || console.log).bind(console);
+    let enabled = false;
+    function apply(){
+      console.log = enabled ? origLog : function(){};
+      console.debug = enabled ? origDebug : function(){};
+    }
+    apply();
+    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+      chrome.storage.local.get('debug_mode', (res)=>{ enabled = !!res.debug_mode; apply(); });
+      if (chrome.storage.onChanged) {
+        chrome.storage.onChanged.addListener((changes, area)=>{
+          if (area === 'local' && changes.debug_mode) { enabled = !!changes.debug_mode.newValue; apply(); }
+        });
+      }
+    }
+  } catch(e){}
+})();
 
 // Prevent multiple executions
 if (window.qseDilutionTrackerLoaded) {
@@ -32,6 +53,8 @@ if (window.qseDilutionTrackerLoaded) {
         // Wait for page to load and extract data
         setTimeout(() => {
           extractTickerData(ticker);
+          // Also run generic page crawler storing all label/value + tables
+          setTimeout(() => crawlAndStoreStructuredPageDataDT(ticker), 800);
         }, 2000); // Wait 2 seconds for dynamic content
         
         // Set up observer for dynamic content changes if not already set
@@ -62,6 +85,9 @@ if (window.qseDilutionTrackerLoaded) {
               clearTimeout(window.qseExtractionTimeout);
               window.qseExtractionTimeout = setTimeout(() => {
                 extractTickerData(window.qseCurrentTicker);
+                // Debounced crawl on DOM changes
+                clearTimeout(window.__qseDTCrawlTimer);
+                window.__qseDTCrawlTimer = setTimeout(() => crawlAndStoreStructuredPageDataDT(window.qseCurrentTicker), 700);
               }, 1000);
             }
           });
@@ -181,7 +207,7 @@ async function extractTickerData(ticker) {
     const priceData = extractPriceData();
     console.log('📈 Price data:', priceData);
     
-    // Parse float and shares outstanding values
+    // Parse float and shares outstanding values (initial regex)
     const floatData = parseFloatData(floatText);
     
     // Combine all data
@@ -189,6 +215,13 @@ async function extractTickerData(ticker) {
       if (estimatedCash) floatData.estimatedCash = estimatedCash;
       if (companyData) Object.assign(floatData, companyData);
       if (priceData) Object.assign(floatData, priceData);
+
+      // Strong override using DOM structure: #company-description-float-wrapper
+      const fo = parseFloatAndOSFromWrapper(document);
+      if (fo) {
+        if (typeof fo.floatM === 'number') floatData.latestFloat = fo.floatM;
+        if (typeof fo.sharesM === 'number') floatData.sharesOutstanding = fo.sharesM;
+      }
     }
     
     if (floatData) {
@@ -199,8 +232,16 @@ async function extractTickerData(ticker) {
         addVerificationIcons(ticker, floatData);
       }, 500);
       
+      // Prepare storage-safe copy: store Float/OS with unit suffix (M/B)
+      const storeReady = { ...floatData };
+      if (typeof storeReady.latestFloat === 'number') {
+        storeReady.latestFloat = formatMillionsToUnitString(storeReady.latestFloat);
+      }
+      if (typeof storeReady.sharesOutstanding === 'number') {
+        storeReady.sharesOutstanding = formatMillionsToUnitString(storeReady.sharesOutstanding);
+      }
       // Check if data has changed before storing
-      await storeTickerDataIfChanged(ticker, floatData);
+      await storeTickerDataIfChanged(ticker, storeReady);
     } else {
       console.log('❌ Could not parse float data from text');
     }
@@ -211,6 +252,415 @@ async function extractTickerData(ticker) {
     // Always clear the extraction flag
     window.qseExtracting = false;
   }
+
+  // Finished extraction for ticker
+}
+
+/**
+ * Crawl entire DilutionTracker page for label/value pairs and tables
+ * and store structured JSON under the ticker in chrome.storage.local
+ */
+async function crawlAndStoreStructuredPageDataDT(ticker) {
+  try {
+    const data = buildStructuredPageDataGeneric();
+    if (!data) return;
+
+    data.meta = {
+      url: location.href,
+      title: document.title,
+      crawledAt: new Date().toISOString(),
+      host: 'dilutiontracker'
+    };
+
+    const storageKey = `ticker_${ticker}`;
+    const current = await chrome.storage.local.get(storageKey);
+    const existing = current[storageKey] || {};
+    const pageCrawls = existing.pageCrawls || {};
+    pageCrawls['dilutiontracker'] = data;
+
+    const inferred = data.inferred || {};
+    // Merge without clobbering authoritative numeric fields (latestFloat, sharesOutstanding)
+    const merged = { ...existing, pageCrawls, lastUpdated: Date.now() };
+    const protectedKeys = new Set(['latestFloat','sharesOutstanding']);
+    Object.entries(inferred).forEach(([k,v]) => {
+      if (protectedKeys.has(k)) {
+        if (merged[k] == null) {
+          // Convert unit string to millions if possible
+          const pu = parseNumUnitDT(v);
+          const unit = pu.unit || 'M';
+          merged[k] = pu.num ? (unit === 'B' ? parseFloat(pu.num) * 1000 : unit === 'K' ? parseFloat(pu.num) / 1000 : parseFloat(pu.num)) : v;
+        }
+      } else {
+        merged[k] = v;
+      }
+    });
+    await chrome.storage.local.set({ [storageKey]: merged });
+    console.log(`💾 Stored structured crawl for ${ticker} (dilutiontracker)`, data, merged);
+
+    // Value highlighting removed by request
+  } catch (e) {
+    console.warn('crawlAndStoreStructuredPageDataDT error:', e);
+  }
+}
+
+/**
+ * Generic DOM-to-JSON builder (shared logic as in fintel crawler)
+ */
+function buildStructuredPageDataGeneric() {
+  try {
+    const values = {};
+    const tables = [];
+
+    function pushKV(label, value, source, el) {
+      const key = canonicalKeyForLabelDT(label);
+      if (!key) return;
+      // Drop unwanted field names like Title
+      if (key === 'title' || /^\s*title\s*$/i.test(String(label))) return;
+      if (!values[key]) values[key] = [];
+      const heading = findNearestHeadingDT(el);
+      const cleanVal = sanitizeValueForStorageDT(String(value), key);
+      if (!shouldKeepPairDT(key, String(label), cleanVal)) return;
+      values[key].push({ label: String(label).trim(), value: cleanVal, rawValue: String(value), source, selector: cssPathDT(el), heading });
+    }
+
+    // Definition lists
+    document.querySelectorAll('dl').forEach(dl => {
+      const items = dl.querySelectorAll('dt, dd');
+      for (let i = 0; i < items.length; i++) {
+        const dt = items[i];
+        if (dt.tagName !== 'DT') continue;
+        const dd = items[i + 1];
+        if (dd && dd.tagName === 'DD') {
+          const label = dt.textContent?.trim();
+          const value = dd.textContent?.trim();
+          if (label && value) pushKV(label, value, 'dl', dd);
+        }
+      }
+    });
+
+    // Tables
+    document.querySelectorAll('table').forEach(table => {
+      const t = extractTableDT(table);
+      if (t && t.rows && t.rows.length) tables.push(t);
+
+      const rows = table.querySelectorAll('tr');
+      rows.forEach(row => {
+        const cells = row.querySelectorAll('th,td');
+        if (cells.length >= 2) {
+          const label = cells[0].textContent?.trim();
+          const value = cells[1].textContent?.trim();
+          if (label && value && isLikelyLabelDT(label)) pushKV(label, value, 'table', cells[1]);
+        }
+      });
+    });
+
+    // Inline label: value (support multiple pairs within one element)
+    const blocks = document.querySelectorAll('p,li,div,section,span');
+    blocks.forEach(el => {
+      const text = (el.textContent || '').trim();
+      if (!text) return;
+      const pairs = extractInlinePairsDT(text);
+      if (!pairs || !pairs.length) return;
+      pairs.forEach(({ label, value }) => {
+        // Special-case split: "Mkt Cap & EV: 20.4M / 83.1M"
+        if (/^mkt\s*cap\s*&\s*ev$/i.test(label)) {
+          const parts = String(value).split('/').map(s => s.trim());
+          if (parts[0]) pushKV('Mkt Cap', parts[0], 'inline', el);
+          if (parts[1]) pushKV('EV', parts[1], 'inline', el);
+          return;
+        }
+        // Special-case split: "Float & OS: 1.96M / 2.57M"
+        if (/^float\s*&\s*os$/i.test(label)) {
+          const parts = String(value).split('/').map(s => s.trim());
+          if (parts[0]) pushKV('Float', parts[0], 'inline', el);
+          if (parts[1]) pushKV('OS', parts[1], 'inline', el);
+          return;
+        }
+        if (isLikelyLabelDT(label) && value) pushKV(label, value, 'inline', el);
+      });
+    });
+
+    // Infer canonical values
+    const inferred = {};
+    const preferKeys = [
+      'float','sharesOutstanding','estimatedCash','marketCap','enterpriseValue',
+      'sector','industry','country','exchange','institutionalOwnership','lastDataUpdate'
+    ];
+    for (const k of preferKeys) {
+      if (values[k] && values[k].length) inferred[k] = transformFieldForStorageDT(k, values[k][0].value);
+    }
+
+    return { values, tables, inferred };
+  } catch (e) {
+    console.warn('buildStructuredPageDataGeneric error:', e);
+    return null;
+  }
+}
+
+function extractTableDT(table) {
+  const headers = [];
+  let headerRow = table.querySelector('thead tr') || table.querySelector('tr');
+  if (headerRow) headerRow.querySelectorAll('th,td').forEach(h => headers.push(cleanTextDT(h.textContent)));
+  const rows = [];
+  const bodyRows = table.querySelectorAll('tbody tr');
+  const dataRows = bodyRows.length ? bodyRows : table.querySelectorAll('tr');
+  dataRows.forEach((row) => {
+    if (row === headerRow) return;
+    const cells = row.querySelectorAll('td,th');
+    if (!cells.length) return;
+    const obj = {};
+    cells.forEach((cell, i) => {
+      const key = headers[i] || `col_${i}`;
+      obj[key] = cleanTextDT(cell.textContent);
+    });
+    // prune explanatory rows
+    const pruned = {};
+    Object.entries(obj).forEach(([h, v]) => {
+      if (isUsefulTableCellDT(h, v)) pruned[h] = v;
+    });
+    if (Object.keys(pruned).length) rows.push(pruned);
+  });
+  const name = table.getAttribute('id') || table.getAttribute('aria-label') || table.getAttribute('data-name') || findNearestHeadingDT(table) || 'table';
+  const key = normalizeKeyDT(name);
+  return { key, name, id: table.id || null, class: table.className || null, headers, rows };
+}
+
+function canonicalKeyForLabelDT(label) {
+  const raw = String(label).trim().toLowerCase();
+  const map = {
+    'float': 'float', 'free float': 'float',
+    'shares outstanding': 'sharesOutstanding', 'outstanding shares': 'sharesOutstanding', 'os': 'sharesOutstanding',
+    'estimated cash': 'estimatedCash', 'cash': 'estimatedCash',
+    'est. net cash/sh': 'estimatedNetCashPerShare', 'est net cash/sh': 'estimatedNetCashPerShare', 'estimated net cash/sh': 'estimatedNetCashPerShare',
+    'institutional ownership': 'institutionalOwnership', 'inst own': 'institutionalOwnership', 'inst': 'institutionalOwnership',
+    'market cap': 'marketCap', 'mkt cap': 'marketCap',
+    'enterprise value': 'enterpriseValue', 'ev': 'enterpriseValue',
+    'sector': 'sector', 'industry': 'industry', 'country': 'country', 'exchange': 'exchange',
+    'last update': 'lastDataUpdate', 'data as of': 'lastDataUpdate', 'as of': 'lastDataUpdate'
+  };
+  if (map[raw]) return map[raw];
+  return normalizeKeyDT(raw);
+}
+
+function normalizeKeyDT(s) {
+  return String(s).trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().replace(/ (\w)/g, (_, c) => c.toUpperCase());
+}
+function isLikelyLabelDT(s) { const t = String(s).trim(); if (!t) return false; if (/\d{2,}/.test(t)) return false; return /[A-Za-z]/.test(t) && t.length <= 48; }
+function cleanTextDT(s) { return (s || '').replace(/\s+/g, ' ').trim(); }
+function findNearestHeadingDT(el) {
+  const headingSel = 'h1,h2,h3,h4,h5,h6';
+  let cur = el;
+  for (let i = 0; i < 5 && cur; i++) {
+    let p = cur.previousElementSibling;
+    while (p) { if (p.matches && p.matches(headingSel)) return cleanTextDT(p.textContent); p = p.previousElementSibling; }
+    cur = cur.parentElement;
+  }
+  return null;
+}
+function cssPathDT(el) {
+  try { if (!(el instanceof Element)) return ''; const path = []; while (el && el.nodeType === Node.ELEMENT_NODE) { let selector = el.nodeName.toLowerCase(); if (el.id) { selector += `#${el.id}`; path.unshift(selector); break; } else { let sib = el; let nth = 1; while ((sib = sib.previousElementSibling)) { if (sib.nodeName.toLowerCase() === selector) nth++; } selector += `:nth-of-type(${nth})`; } path.unshift(selector); el = el.parentNode; } return path.join(' > ');} catch { return ''; }
+}
+
+// Extract multiple label:value pairs from a single text, e.g. "Exchange: NASDAQ Mkt Cap & EV: 20.4M / 83.1M Float & OS: 1.96M / 2.57M"
+function extractInlinePairsDT(text) {
+  try {
+    const pairs = [];
+    const re = /([A-Za-z][A-Za-z0-9 .%/()&-]{1,40})\s*[:\-–—]\s*([^]|[^])+?/g; // we'll bound matches by lookahead check
+    // We will iterate by finding label positions, then slicing value up to next label
+    const labelRe = /([A-Za-z][A-Za-z0-9 .%/()&-]{1,40})\s*[:\-–—]\s*/g;
+    let match;
+    const indices = [];
+    while ((match = labelRe.exec(text)) !== null) {
+      indices.push({ idx: match.index, label: match[1], next: labelRe.lastIndex });
+    }
+    for (let i = 0; i < indices.length; i++) {
+      const curr = indices[i];
+      const nextStart = (i + 1 < indices.length) ? indices[i + 1].idx : text.length;
+      const value = text.substring(curr.next, nextStart).trim();
+      const label = curr.label.trim();
+      if (label && value) pairs.push({ label, value });
+    }
+    return pairs;
+  } catch { return []; }
+}
+
+// New: Highlight by values from crawled JSON
+function highlightValuesFromStructuredDataDT(_pageData) { return; }
+
+function highlightByPatternsDT() { return; }
+
+function wrapMatchesInTextNodeDT() { return; }
+
+function buildFlexiblePatternsForValueDT() { return []; }
+
+function escapeRegexDT(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+// Sanitization and transforms (mirror Fintel helpers)
+function sanitizeValueForStorageDT(val, key) {
+  try {
+    if (!val) return '';
+    let s = String(val);
+    if (s.normalize) s = s.normalize('NFKC');
+    s = s.replace(/[\u200B-\u200D\uFEFF]/g, '');
+    s = s.replace(/[\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000]/g, ' ');
+    if (key === 'description') return s.trim();
+    s = s.replace(/\s+/g, ' ').trim();
+    return normalizeFieldValueDT(key, s);
+  } catch { return String(val).trim(); }
+}
+
+// Decide whether to keep a label/value pair
+function shouldKeepPairDT(key, label, value) {
+  if (!value) return false;
+  const k = String(key).toLowerCase();
+  if (k === 'title') return false;
+  if (isBlacklistedKeyDT(k) || isBlacklistedKeyDT(label)) return false;
+  const allowedTextKeys = new Set(['sector','industry','country','exchange','description','marketCap','enterpriseValue','institutionalOwnership','lastDataUpdate']);
+  if (allowedTextKeys.has(k)) {
+    if (k === 'description') return true;
+    return !isLikelyExplanationTextDT(value);
+  }
+  return isValueLikeDT(value);
+}
+
+function isLikelyExplanationTextDT(s) {
+  const v = String(s).trim();
+  if (v.length > 140) return true;
+  const sentences = v.split(/[.!?]/).filter(x => x.trim().length);
+  if (sentences.length >= 2 && v.length > 80) return true;
+  if (/\b(this\s+number|provided\s+by|that\s+were|number\s+of\s+short\s+shares|included\s+in)\b/i.test(v)) return true;
+  return false;
+}
+
+function isValueLikeDT(s) {
+  const v = String(s).trim();
+  if (!v) return false;
+  if (/\d/.test(v)) return true;
+  if (/[%$]/.test(v)) return true;
+  if (/\b(shares?|days?|volume|rate|float|borrow|exempt|deliver|ftd)\b/i.test(v)) return true;
+  if (v.length <= 24 && /^[A-Za-z][A-Za-z &-]*$/.test(v)) return true;
+  return false;
+}
+
+function isUsefulTableCellDT(header, value) {
+  const h = String(header || '').toLowerCase();
+  if (isBlacklistedKeyDT(h)) return false;
+  if (/date|time|settlement|as of/.test(h)) return true;
+  if (/label|description|notes?/.test(h)) return false;
+  if (isLikelyExplanationTextDT(value)) return false;
+  return isValueLikeDT(value);
+}
+
+function isBlacklistedKeyDT(name) {
+  const n = String(name || '').toLowerCase().trim();
+  const norm = n.replace(/[^a-z0-9]+/g, '');
+  const set = new Set([
+    'offexchangeshortvolume',
+    'offexchangeshortvolumeratio',
+    'psxbxshortvolume',
+    'aggregatetotalvolume',
+    'aggregateshortvolume',
+    'aggregateshortvolumeratio',
+    'cboeshortvolume',
+    'offexchangeshortvolume',
+    'values'
+  ]);
+  return set.has(norm);
+}
+
+function transformFieldForStorageDT(key, value) {
+  if (key === 'shortInterest') {
+    const n = parseShareCountDT(value);
+    return Number.isFinite(n) ? n : value;
+  }
+  if (key === 'shortInterestPercentFloat') {
+    const p = extractPercentDT(value);
+    return p || value;
+  }
+  if (key === 'finraExemptVolume' || key === 'finraNonExemptVolume') {
+    const v = extractSharesCountDT(value);
+    return v || value;
+  }
+  return value;
+}
+
+function parseShareCountDT(input) {
+  if (input == null) return NaN;
+  let s = String(input).trim();
+  s = s.replace(/shares?|shrs?/ig, '').trim();
+  const m = s.match(/^([\d.,]+)\s*([KMB])?$/i);
+  if (!m) {
+    const m2 = s.match(/([\d][\d.,]*)/);
+    if (!m2) return NaN;
+    return parseInt(m2[1].replace(/,/g, ''), 10);
+  }
+  const num = parseFloat(m[1].replace(/,/g, ''));
+  if (!isFinite(num)) return NaN;
+  const unit = (m[2] || '').toUpperCase();
+  const mult = unit === 'B' ? 1e9 : unit === 'M' ? 1e6 : unit === 'K' ? 1e3 : 1;
+  return Math.round(num * mult);
+}
+
+function normalizeFieldValueDT(key, value) {
+  const k = String(key || '').toLowerCase();
+  if (k === 'shortinterestpercentfloat') {
+    const p = extractPercentDT(value);
+    return p || value;
+  }
+  if (k === 'finraexemptvolume' || k === 'finranonexemptvolume') {
+    const v = extractSharesCountDT(value);
+    return v || value;
+  }
+  if (k === 'institutionalownership') {
+    const p = extractPercentDT(value);
+    return p || value;
+  }
+  if (k === 'marketcap' || k === 'enterprisevalue' || k === 'float' || k === 'sharesoutstanding') {
+    const pu = parseNumUnitDT(value);
+    const unit = pu.unit || 'M';
+    return pu.num ? `${pu.num}${unit}` : value;
+  }
+  return value;
+}
+
+function extractPercentDT(s) {
+  const m = String(s).match(/([\d.,]+)\s*%/);
+  if (!m) return null;
+  const num = m[1].replace(/\s/g, '');
+  return `${num}%`;
+}
+
+function extractSharesCountDT(s) {
+  const txt = String(s);
+  const m = txt.match(/([\d.,]+)\s*([KMB])?\s*(shares?)?/i);
+  if (!m) return null;
+  let val = m[1].trim();
+  if (m[2]) val = `${val}${m[2].toUpperCase()}`;
+  if (m[3]) val = `${val} shares`;
+  return val;
+}
+
+// Extract the first numeric+unit token like "1.96M", "2.57M", "20.4M", "83.1M"
+function pickFirstUnitValue(s, units = ['K','M','B']) {
+  const txt = String(s || '');
+  const u = units.map(u => u.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')).join('|');
+  const m = txt.match(new RegExp(`([0-9][0-9.,]*)\s*(?:${u})`, 'i'));
+  if (!m) return null;
+  const num = m[1].replace(/\s/g, '');
+  const unitMatch = txt.slice(m.index + m[0].length - 1).match(/^[A-Za-z]/);
+  // Better: pull the actual unit from the matched slice
+  const unit = (m[0].match(new RegExp(`(${u})`, 'i')) || [])[1] || '';
+  return `${num}${unit.toUpperCase()}`;
+}
+
+// Parse number and optional unit (K/M/B). Returns { num: '1.96', unit: 'M' | null }
+function parseNumUnitDT(s) {
+  const txt = String(s || '').trim();
+  const m = txt.match(/([0-9][0-9.,]*)\s*([KMB])?/i);
+  if (!m) return { num: null, unit: null };
+  const num = (m[1] || '').replace(/\s+/g, '');
+  const unit = m[2] ? m[2].toUpperCase() : null;
+  return { num, unit };
 }
 
 /**
@@ -220,132 +670,70 @@ async function extractTickerData(ticker) {
 function extractCompanyData() {
   try {
     const result = {};
-    
-    // Find all text nodes and look for structured data
-    const walker = document.createTreeWalker(
-      document.body,
-      NodeFilter.SHOW_TEXT,
-      null,
-      false
-    );
-    
-    const textNodes = [];
-    let node;
-    while (node = walker.nextNode()) {
-      if (node.nodeValue.trim()) {
-        textNodes.push(node.nodeValue.trim());
-      }
-    }
-    
-    // Combine text nodes into searchable content
-    const fullText = textNodes.join(' ');
-    
-    console.log(`🔍 Searching company data in text: "${fullText.substring(0, 500)}..."`);
-    
-    // More precise patterns using word boundaries - enhanced for better matching
-    const patterns = [
-      { field: 'sector', regex: [
-        /\bSector:\s*([^\n\r]*?)(?=\s*Industry:|\s*Country:|\s*Exchange:|\s*$)/i,
-        /\bSector[:\s]+([^|\n\r]+?)(?=\s+Industry|\s+Country|\s+Exchange|$)/i,
-        /sector[:\s]*([^|\n\r,;]+)/i,
-        // Additional flexible patterns
-        /\bSector\s+([A-Za-z\s&-]+?)(?=\s+Industry|\s+Country|\s+Exchange|\s*$)/i,
-        /Sector[:\s]*([A-Za-z\s&-]+)(?=\s*\||\s*Industry|\s*Country)/i,
-        /\bSector\b[:\s]*([A-Za-z\s&-]+?)(?=\s*\n|\s*\r|$)/i
-      ]},
-      { field: 'industry', regex: [
-        /\bIndustry:\s*([^\n\r]*?)(?=\s*Country:|\s*Exchange:|\s*Sector:|\s*$)/i,
-        /\bIndustry[:\s]+([^|\n\r]+?)(?=\s+Country|\s+Exchange|\s+Sector|$)/i,
-        /industry[:\s]*([^|\n\r,;]+)/i,
-        // Additional flexible patterns
-        /\bIndustry\s+([A-Za-z\s&-]+?)(?=\s+Country|\s+Exchange|\s+Sector|\s*$)/i,
-        /Industry[:\s]*([A-Za-z\s&-]+)(?=\s*\||\s*Country|\s*Exchange)/i,
-        /\bIndustry\b[:\s]*([A-Za-z\s&-]+?)(?=\s*\n|\s*\r|$)/i
-      ]},
-      { field: 'country', regex: [
-        /\bCountry:\s*([^\n\r]*?)(?=\s*Exchange:|\s*Sector:|\s*Industry:|\s*$)/i,
-        /\bCountry[:\s]+([^|\n\r]+?)(?=\s+Exchange|\s+Sector|\s+Industry|$)/i,
-        /country[:\s]*([^|\n\r,;]+)/i
-      ]},
-      { field: 'exchange', regex: [
-        /\bExchange:\s*([^\n\r]*?)(?=\s*Sector:|\s*Industry:|\s*Country:|\s*$)/i,
-        /\bExchange[:\s]+([^|\n\r]+?)(?=\s+Sector|\s+Industry|\s+Country|$)/i,
-        /exchange[:\s]*([^|\n\r,;]+)/i
-      ]},
-      { field: 'institutionalOwnership', regex: [
-        /\bInst Own:\s*([0-9.,]+%?)/i,
-        /\bInstitutional Ownership[:\s]*([0-9.,]+%?)/i,
-        /\bInst[:\s]+([0-9.,]+%?)/i
-      ]},
-      { field: 'marketCap', regex: [
-        /\bMkt Cap & EV:\s*([0-9.,]+[KMB])\s*\//i,
-        /\bMarket Cap[:\s]*([0-9.,]+[KMB])/i,
-        /\bMkt Cap[:\s]*([0-9.,]+[KMB])/i
-      ]},
-      { field: 'enterpriseValue', regex: [
-        /\bMkt Cap & EV:\s*[0-9.,]+[KMB]\s*\/\s*([0-9.,]+[KMB])/i,
-        /\bEnterprise Value[:\s]*([0-9.,]+[KMB])/i,
-        /\bEV[:\s]*([0-9.,]+[KMB])/i
-      ]}
-    ];
-    
-    // Extract description from #companyDesc element
+
+    // Prefer the company description wrapper area to scope extraction
+    const scope = document.getElementById('company-description-float-wrapper') || document.body;
+
+    // Pull description from specific element if available
     const companyDescElement = document.getElementById('companyDesc');
     if (companyDescElement) {
       result.description = companyDescElement.textContent?.trim();
-      console.log(`✅ Found description: ${result.description?.substring(0, 100)}...`);
     }
-    
-    patterns.forEach(({ field, regex }) => {
-      const regexArray = Array.isArray(regex) ? regex : [regex];
-      
-      // Special debugging for sector and industry
-      if (field === 'sector' || field === 'industry') {
-        console.log(`🔍 DEBUG ${field}: Trying ${regexArray.length} patterns against text sample:`, fullText.substring(0, 500));
-      }
-      
-      for (let i = 0; i < regexArray.length; i++) {
-        const currentRegex = regexArray[i];
-        const match = fullText.match(currentRegex);
-        
-        // Special debugging for sector and industry
-        if (field === 'sector' || field === 'industry') {
-          console.log(`🔍 DEBUG ${field} pattern ${i + 1}: ${currentRegex} -> ${match ? `Match: "${match[1]}"` : 'No match'}`);
+
+    // Extract inline pairs within scope and split combined labels
+    const blocks = scope.querySelectorAll('p,li,div,section,span');
+    blocks.forEach(el => {
+      const text = (el.textContent || '').trim();
+      if (!text) return;
+      const pairs = extractInlinePairsDT(text);
+      if (!pairs || !pairs.length) return;
+
+      pairs.forEach(({ label, value }) => {
+        // Split pairs we know may contain two values
+        if (/^mkt\s*cap\s*&\s*ev$/i.test(label)) {
+          const parts = String(value).split('/').map(s => s.trim());
+          const a = parseNumUnitDT(parts[0] || '');
+          const b = parseNumUnitDT(parts[1] || '');
+          const unitA = a.unit || 'M';
+          const unitB = b.unit || unitA;
+          if (a.num && !result.marketCap) result.marketCap = `${a.num}${unitA}`;
+          if (b.num && !result.enterpriseValue) result.enterpriseValue = `${b.num}${unitB}`;
+          return;
         }
-        
-        if (match && match[1]) {
-          result[field] = match[1].trim();
-          console.log(`✅ Found ${field}: ${result[field]} (using pattern ${i + 1})`);
-          break; // Stop after first match
+        if (/^float\s*&\s*(os|shares\s*outstanding|outstanding\s*shares)\b/i.test(label)) {
+          const parts = String(value).split('/').map(s => s.trim());
+          const a = parseNumUnitDT(parts[0] || '');
+          const b = parseNumUnitDT(parts[1] || '');
+          const unitA = a.unit || 'M';
+          const unitB = b.unit || unitA;
+          if (a.num && !result.float) result.float = `${a.num}${unitA}`;
+          if (b.num && !result.sharesOutstanding) result.sharesOutstanding = `${b.num}${unitB}`;
+          return;
         }
-      }
-      
-      if (!result[field]) {
-        console.log(`❌ Could not find ${field} in text`);
-      }
+
+        // Map label -> key and assign if not already present
+        const key = canonicalKeyForLabelDT(label);
+        if (!key) return;
+        if (['exchange','sector','industry','country','institutionalOwnership','estimatedNetCashPerShare','marketCap','enterpriseValue','float','sharesOutstanding'].includes(key)) {
+          let val = String(value).trim();
+          if (key === 'institutionalOwnership') {
+            const m = val.match(/([0-9][0-9.,]*)\s*%/);
+            if (m) val = `${m[1]}%`; else return;
+          }
+          if (key === 'exchange') {
+            if (!isGoodExchangeDT(val)) return;
+          }
+          if (key === 'marketCap' || key === 'enterpriseValue' || key === 'float' || key === 'sharesOutstanding') {
+            const cleaned = pickFirstUnitValue(val, ['K','M','B']);
+            if (cleaned) val = cleaned; else return;
+          }
+          if (!result[key]) result[key] = val;
+        }
+      });
     });
-    
-    // Alternative patterns for market cap if the combined pattern doesn't work
-    if (!result.marketCap) {
-      const altCapPattern = /\b(?:Market Cap|Mkt Cap):\s*([0-9.,]+[KMB])/i;
-      const altCapMatch = fullText.match(altCapPattern);
-      if (altCapMatch) {
-        result.marketCap = altCapMatch[1].trim();
-        console.log(`✅ Found market cap (alt): ${result.marketCap}`);
-      }
-    }
-    
-    if (!result.enterpriseValue) {
-      const altEvPattern = /\b(?:Enterprise Value|EV):\s*([0-9.,]+[KMB])/i;
-      const altEvMatch = fullText.match(altEvPattern);
-      if (altEvMatch) {
-        result.enterpriseValue = altEvMatch[1].trim();
-        console.log(`✅ Found EV (alt): ${result.enterpriseValue}`);
-      }
-    }
-    
-    return Object.keys(result).length > 0 ? result : null;
-    
+
+    return Object.keys(result).length ? result : null;
+
   } catch (error) {
     console.error('❌ Error extracting company data:', error);
     return null;
@@ -429,16 +817,10 @@ function extractEstimatedCash() {
       const pattern = cashPatterns[i];
       const match = pageText.match(pattern);
       if (match) {
-        const cashNum = parseFloat(match[1].replace(/,/g, ''));
-        const cashUnit = match[2].toUpperCase();
-        const cashInMillions = convertToMillions(cashNum, cashUnit);
-        
-        const patternType = i === 0 ? 'estimated current cash' : 
-                          i === 1 ? 'quarterly operating cash flow' : 
-                          `pattern ${i + 1}`;
-        
-        console.log(`✅ Found ${patternType}: $${cashInMillions}M (from "${match[0]}")`);
-        return cashInMillions;
+        const rawNum = match[1].replace(/,/g, '').trim();
+        const unit = match[2].toUpperCase(); // 'M' or 'B'
+        const unitStr = `${rawNum}${unit}`;
+        return unitStr; // Store with unit to avoid ambiguity
       }
     }
     
@@ -543,12 +925,70 @@ function parseFloatData(text) {
  * @returns {number} Value in millions
  */
 function convertToMillions(num, unit) {
+  console.log('num: ' + num);
+  console.log('unit: ' + unit);
   if (unit === 'B') {
     return num * 1000; // Billions to millions
   } else if (unit === 'M') {
     return num; // Already in millions
   }
   return num; // Default to millions
+}
+
+function formatMillionsToUnitString(n) {
+  if (typeof n !== 'number' || !isFinite(n)) return String(n);
+  if (n >= 1000) {
+    const v = (n / 1000);
+    return trimZeros(v.toFixed(2)) + 'B';
+  }
+  return trimZeros(n.toFixed(2)) + 'M';
+}
+
+function trimZeros(s) {
+  return String(s).replace(/\.00$/, '').replace(/(\.[1-9])0$/, '$1');
+}
+
+/**
+ * Robustly parse Float & OS from the float wrapper element and return numbers in millions
+ */
+function parseFloatAndOSFromWrapper(root = document) {
+  try {
+    const el = root.querySelector('#company-description-float-wrapper');
+    if (!el) return null;
+    // DOM-first: locate the value container next to the label
+    const valueEl = el.querySelector('.mr-4.pr-1, span.mr-4.pr-1, span[class*="mr-4"][class*="pr-1"]') || el;
+    const nums = [];
+    const walker = document.createTreeWalker(valueEl, NodeFilter.SHOW_TEXT, null);
+    let n;
+    while ((n = walker.nextNode())) {
+      const s = n.nodeValue.replace(/\u00A0/g, ' ').trim();
+      if (!s) continue;
+      const m = s.match(/([0-9][\d.,]*)\s*([KMB])?/i);
+      if (m) nums.push({ num: m[1], unit: (m[2] || null) });
+    }
+    if (nums.length >= 2) {
+      const a = nums[0];
+      const b = nums[1];
+      const unitA = (a.unit || 'M').toUpperCase();
+      const unitB = (b.unit || unitA).toUpperCase();
+      const num1 = parseFloat(a.num.replace(/,/g, ''));
+      const num2 = parseFloat(b.num.replace(/,/g, ''));
+      const floatM = unitA === 'B' ? num1 * 1000 : unitA === 'K' ? num1 / 1000 : num1;
+      const sharesM = unitB === 'B' ? num2 * 1000 : unitB === 'K' ? num2 / 1000 : num2;
+      return { floatM, sharesM, floatText: `${num1}${unitA}`, sharesText: `${num2}${unitB}` };
+    }
+    // Fallback to text regex as last resort
+    const txt = (el.textContent || '').replace(/\u00A0/g, ' ').replace(/\s+/g, ' ').trim();
+    const mr = txt.match(/([0-9][\d.,]*)\s*([KMB])?\s*\/\s*([0-9][\d.,]*)\s*([KMB])?/i);
+    if (!mr) return null;
+    const num1 = parseFloat(mr[1].replace(/,/g, ''));
+    const unit1 = (mr[2] || 'M').toUpperCase();
+    const num2 = parseFloat(mr[3].replace(/,/g, ''));
+    const unit2 = (mr[4] || unit1 || 'M').toUpperCase();
+    const floatM = unit1 === 'B' ? num1 * 1000 : unit1 === 'K' ? num1 / 1000 : num1;
+    const sharesM = unit2 === 'B' ? num2 * 1000 : unit2 === 'K' ? num2 / 1000 : num2;
+    return { floatM, sharesM, floatText: `${num1}${unit1}`, sharesText: `${num2}${unit2}` };
+  } catch { return null; }
 }
 
 /**
@@ -660,21 +1100,13 @@ async function addVerificationIcons(ticker, currentData) {
 function addIndividualCheckmarks(matchingFields, isFirstTime) {
   try {
     console.log(`🔍 Adding individual checkmarks for fields:`, matchingFields);
-    
+    // Note: Green text styling removed; we no longer modify colors.
     matchingFields.forEach(({ field, value, label }) => {
       const container = findContainerForValue(field, label, value);
-      if (container) {
-        addCheckmarkToContainer(container, field, label, value, isFirstTime);
-      } else {
-        console.log(`❌ Could not find container for ${field}: ${label}`);
-      }
+      if (!container) console.log(`❌ Could not find container for ${field}: ${label}`);
     });
-    
-    // Additional direct searches for specific elements
-    highlightDirectElements(matchingFields);
-    
-    console.log(`✅ Added individual checkmarks for ${matchingFields.length} fields`);
-    
+    console.log(`✅ Processed ${matchingFields.length} fields (no color changes)`);
+  
   } catch (error) {
     console.error('❌ Error adding individual checkmarks:', error);
   }
@@ -684,69 +1116,7 @@ function addIndividualCheckmarks(matchingFields, isFirstTime) {
  * Direct search and highlight for specific DilutionTracker elements
  * @param {Array} matchingFields - Array of field objects to check
  */
-function highlightDirectElements(matchingFields) {
-  console.log(`🎯 Starting direct element highlighting`);
-  
-  // Create a map of field values for quick lookup
-  const fieldValues = {};
-  matchingFields.forEach(({ field, value }) => {
-    fieldValues[field] = value;
-  });
-  
-  // 1. Search for "Industry:" and highlight its sibling value
-  console.log(`🎯 DEBUG: Attempting to highlight Industry with value: "${fieldValues.industry}"`);
-  highlightLabelSibling('Industry:', fieldValues.industry);
-  
-  // 2. Search for "Sector:" and highlight its sibling value  
-  console.log(`🎯 DEBUG: Attempting to highlight Sector with value: "${fieldValues.sector}"`);
-  highlightLabelSibling('Sector:', fieldValues.sector);
-  
-  // 3. FALLBACK: Disabled to prevent excessive DOM processing
-  // if (!fieldValues.sector) {
-  //   console.log(`🎯 FALLBACK: No sector value in matching fields, trying generic sector highlighting`);
-  //   highlightGenericLabel('Sector:');
-  // }
-  
-  // if (!fieldValues.industry) {
-  //   console.log(`🎯 FALLBACK: No industry value in matching fields, trying generic industry highlighting`);
-  //   highlightGenericLabel('Industry:');
-  // }
-  
-  // 3. Search for "Country:" and highlight its sibling value
-  highlightLabelSibling('Country:', fieldValues.country);
-  
-  // 4. Search for "Exchange:" and highlight its sibling value
-  highlightLabelSibling('Exchange:', fieldValues.exchange);
-  
-  // 5. Search for "Inst Own:" and highlight its sibling value
-  highlightLabelSibling('Inst Own:', fieldValues.institutionalOwnership);
-  
-  // 6. Highlight #companyDesc element
-  const companyDescElement = document.getElementById('companyDesc');
-  if (companyDescElement && fieldValues.description) {
-    console.log(`🎯 Found #companyDesc element, applying green color`);
-    companyDescElement.style.color = 'rgb(34, 197, 94) !important';
-    companyDescElement.style.fontWeight = '500';
-    companyDescElement.classList.add('qse-verified-value');
-  }
-  
-  // 7. Search for cash text patterns and highlight entire snippets
-  if (fieldValues.estimatedCash) {
-    console.log(`🎯 DEBUG: Attempting to highlight cash snippets for value: "${fieldValues.estimatedCash}"`);
-    
-    // Try multiple cash text patterns - highlight entire snippets including dollar amounts
-    highlightCashFlowText('estimated current cash of', fieldValues.estimatedCash);
-    highlightCashFlowText('quarterly operating cash flow of', fieldValues.estimatedCash);
-    
-    // Also try the containing element approach as fallback
-    highlightTextContainingElement('estimated current cash of', fieldValues.estimatedCash);
-    highlightTextContainingElement('quarterly operating cash flow of', fieldValues.estimatedCash);
-  }
-  
-  // 8. Also highlight specific cash text patterns (simpler patterns)
-  highlightSpecificText('and estimated current cash of');
-  highlightSpecificText('quarterly operating cash flow of');
-}
+// highlightDirectElements removed (no color changes)
 
 /**
  * Find label and highlight the label element when data is synced
@@ -1505,38 +1875,9 @@ function findContainerForValue(field, label, value) {
  * @param {string} value - Field value
  * @param {boolean} isFirstTime - Whether this is first time crawling
  */
-function addCheckmarkToContainer(container, field, label, value, isFirstTime) {
-  try {
-    // Check if green styling already applied to this container
-    if (container.style.color === 'rgb(34, 197, 94)' || container.classList.contains('qse-verified-label') || container.classList.contains('qse-verified-value')) {
-      console.log(`⚠️ Green styling already applied to container for ${field}`);
-      return;
-    }
-    
-    // For label highlighting, we want to find and highlight the label part if this container has both
-    const containerText = container.textContent;
-    const hasLabel = containerText.includes(':') || 
-                     containerText.toLowerCase().includes('float') || 
-                     containerText.toLowerCase().includes('outstanding') ||
-                     containerText.toLowerCase().includes('shares');
-    
-    if (hasLabel) {
-      // Try to find the label portion and highlight it
-      highlightLabelInContainer(container, field, label, value, isFirstTime);
-    } else {
-      // If no clear label structure, highlight the whole container (for backwards compatibility)
-      container.style.color = 'rgb(34, 197, 94)';
-      container.style.fontWeight = '500';
-      container.title = isFirstTime ? 
-        `First time extracting ${label}: ${value}` : 
-        `${label} matches extension storage: ${value}`;
-      container.classList.add('qse-verified-label');
-      console.log(`✅ Applied green styling to whole container for ${field} (${label}): ${value}`);
-    }
-    
-  } catch (error) {
-    console.error(`❌ Error applying green styling to container for ${field}:`, error);
-  }
+function addCheckmarkToContainer(_container, _field, _label, _value, _isFirstTime) {
+  // No-op: green text styling and label highlighting removed by request
+  return;
 }
 
 /**

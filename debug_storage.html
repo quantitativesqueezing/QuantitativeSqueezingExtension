@@ -74,7 +74,7 @@
                     let fintelFieldsMissing = [];
                     
                     fintelFields.forEach(field => {
-                        if (data[field] && data[field] !== 'n/a') {
+                        if (data[field] && data[field] !== 'N/A') {
                             fintelFieldsFound.push(`${field}: "${data[field]}"`);
                         } else {
                             fintelFieldsMissing.push(field);
@@ -113,14 +113,14 @@
                 
                 // Test the exact same logic as content.js
                 const pack = {
-                    shortInterest: data?.shortInterest || 'n/a',
-                    shortInterestRatio: data?.shortInterestRatio || 'n/a',
-                    shortInterestPercentFloat: data?.shortInterestPercentFloat || 'n/a',
-                    costToBorrow: data?.costToBorrow || 'n/a',
-                    shortSharesAvailable: data?.shortSharesAvailable || 'n/a',
-                    finraExemptVolume: data?.finraExemptVolume || 'n/a',
-                    failureToDeliver: data?.failureToDeliver || 'n/a',
-                    lastDataUpdate: data?.lastDataUpdate || 'n/a'
+                    shortInterest: data?.shortInterest || 'N/A',
+                    shortInterestRatio: data?.shortInterestRatio || 'N/A',
+                    shortInterestPercentFloat: data?.shortInterestPercentFloat || 'N/A',
+                    costToBorrow: data?.costToBorrow || 'N/A',
+                    shortSharesAvailable: data?.shortSharesAvailable || 'N/A',
+                    finraExemptVolume: data?.finraExemptVolume || 'N/A',
+                    failureToDeliver: data?.failureToDeliver || 'N/A',
+                    lastDataUpdate: data?.lastDataUpdate || 'N/A'
                 };
                 
                 output.innerHTML += `<div class="test-data">
@@ -181,15 +181,15 @@
                 // Step 2: Simulate fetchPack logic
                 const pack = {
                     fetchedAt: storedData?.lastUpdated || Date.now(),
-                    float: storedData?.latestFloat ? `${storedData.latestFloat}m shares` : 'n/a',
-                    shortInterest: storedData?.shortInterest || 'n/a',
-                    shortInterestRatio: storedData?.shortInterestRatio || 'n/a',
-                    shortInterestPercentFloat: storedData?.shortInterestPercentFloat || 'n/a',
-                    costToBorrow: storedData?.costToBorrow || 'n/a',
-                    shortSharesAvailable: storedData?.shortSharesAvailable || 'n/a',
-                    finraExemptVolume: storedData?.finraExemptVolume || 'n/a',
-                    failureToDeliver: storedData?.failureToDeliver || 'n/a',
-                    lastDataUpdate: storedData?.lastDataUpdate || 'n/a'
+                    float: storedData?.latestFloat ? `${storedData.latestFloat}m shares` : 'N/A',
+                    shortInterest: storedData?.shortInterest || 'N/A',
+                    shortInterestRatio: storedData?.shortInterestRatio || 'N/A',
+                    shortInterestPercentFloat: storedData?.shortInterestPercentFloat || 'N/A',
+                    costToBorrow: storedData?.costToBorrow || 'N/A',
+                    shortSharesAvailable: storedData?.shortSharesAvailable || 'N/A',
+                    finraExemptVolume: storedData?.finraExemptVolume || 'N/A',
+                    failureToDeliver: storedData?.failureToDeliver || 'N/A',
+                    lastDataUpdate: storedData?.lastDataUpdate || 'N/A'
                 };
                 
                 output.innerHTML += `<div class="field-analysis">
@@ -197,12 +197,12 @@
                     <div class="storage-data">${JSON.stringify(pack, null, 2)}</div>
                 </div>`;
                 
-                // Step 3: Check for n/a values
-                const nAValues = Object.entries(pack).filter(([key, value]) => value === 'n/a');
+                // Step 3: Check for N/A values
+                const nAValues = Object.entries(pack).filter(([key, value]) => value === 'N/A');
                 if (nAValues.length > 0) {
-                    output.innerHTML += `<div class="error">❌ Fields showing as n/a: ${nAValues.map(([key]) => key).join(', ')}</div>`;
+                    output.innerHTML += `<div class="error">❌ Fields showing as N/A: ${nAValues.map(([key]) => key).join(', ')}</div>`;
                     
-                    // Debug why they're n/a
+                    // Debug why they're N/A
                     nAValues.forEach(([key]) => {
                         const rawValue = storedData?.[key];
                         output.innerHTML += `<div class="test-data">
