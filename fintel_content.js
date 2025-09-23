@@ -270,7 +270,7 @@ function buildStructuredPageData() {
     // Build inferred canonical single-value object (pick first occurrence of known keys)
     const inferred = {};
     const preferKeys = [
-      'shortInterest','shortInterestRatio','shortInterestPercentFloat','costToBorrow',
+      'shortInterest','shortInterestRatio','costToBorrow',
       'shortSharesAvailable','finraExemptVolume','failureToDeliver','float','sharesOutstanding',
       'sector','industry','country','exchange','marketCap','enterpriseValue','lastDataUpdate'
     ];
@@ -506,14 +506,6 @@ function sanitizeValueForStorage(val, key) {
 
 // Field-specific transforms for inferred storage
 function transformFieldForStorage(key, value) {
-  if (key === 'shortInterest') {
-    const n = parseShareCount(value);
-    return Number.isFinite(n) ? n : value;
-  }
-  if (key === 'shortInterestPercentFloat') {
-    const p = extractPercent(value);
-    return p || value;
-  }
   if (key === 'finraExemptVolume' || key === 'finraNonExemptVolume') {
     const v = extractSharesCount(value);
     return v || value;
@@ -568,10 +560,6 @@ function isBlacklistedKey(name) {
 // Normalize specific fields by extracting numeric/units only
 function normalizeFieldValue(key, value) {
   const k = String(key || '').toLowerCase();
-  if (k === 'shortinterestpercentfloat') {
-    const p = extractPercent(value);
-    return p || value;
-  }
   if (k === 'finraexemptvolume' || k === 'finranonexemptvolume') {
     const v = extractSharesCount(value);
     return v || value;
@@ -701,17 +689,6 @@ function extractBasicMetrics(text) {
         /Days\s+to\s+Cover[:\s]*([0-9.,]+\s*days?)/i
       ]
     },
-    
-    // Short Interest % Float patterns  
-    { 
-      field: 'shortInterestPercentFloat', 
-      patterns: [
-        /Short\s+Interest\s+%\s+Float[:\s]*([0-9.,]+%?)/i,
-        /Short\s+Interest\s+%\s+of\s+Float[:\s]*([0-9.,]+%?)/i,
-        /Short\s+%\s+Float[:\s]*([0-9.,]+%?)/i
-      ]
-    },
-    
     // Cost to Borrow patterns
     { 
       field: 'costToBorrow', 
@@ -1066,9 +1043,6 @@ function extractFromTables() {
             'short interest ratio': 'shortInterestRatio',
             'short ratio': 'shortInterestRatio',
             'days to cover': 'shortInterestRatio',
-            'short interest % float': 'shortInterestPercentFloat',
-            'short interest % of float': 'shortInterestPercentFloat',
-            'short % float': 'shortInterestPercentFloat',
             'cost to borrow': 'costToBorrow',
             'borrow rate': 'costToBorrow',
             'borrow fee': 'costToBorrow',
@@ -1147,10 +1121,6 @@ function addFintelGreenTextToElement(container, field, value) {
         /Short\s+Interest\s+Ratio[:\s]*([0-9.,]+\s*days?)/i,
         /Short\s+Ratio[:\s]*([0-9.,]+\s*days?)/i,
         /Days\s+to\s+Cover[:\s]*([0-9.,]+\s*days?)/i
-      ],
-      shortInterestPercentFloat: [
-        /Short\s+Interest\s+%\s+Float[:\s]*([0-9.,]+%?)/i,
-        /Short\s+Interest\s+%\s+of\s+Float[:\s]*([0-9.,]+%?)/i
       ],
       costToBorrow: [
         /Cost\s+to\s+Borrow[:\s]*([0-9.,]+%)/i,
@@ -1242,10 +1212,6 @@ function highlightFintelLabel(parentElement, field, value, text) {
         /Short\s+Interest\s+Ratio(?=[:\s])/i,
         /Short\s+Ratio(?=[:\s])/i,
         /Days\s+to\s+Cover(?=[:\s])/i
-      ],
-      shortInterestPercentFloat: [
-        /Short\s+Interest\s+%\s+Float(?=[:\s])/i,
-        /Short\s+Interest\s+%\s+of\s+Float(?=[:\s])/i
       ],
       costToBorrow: [
         /Cost\s+to\s+Borrow(?=[:\s])/i,
@@ -1450,6 +1416,9 @@ async function storeFintelDataIfChanged(ticker, newFintelData) {
       return;
     }
 
+    // Normalize numeric-like fields to absolute numbers before comparing/storing
+    newFintelData = normalizeFintelNumericFields(newFintelData);
+
     // Get existing ticker data
     const result = await chrome.storage.local.get(`ticker_${ticker}`);
     let existingData = result[`ticker_${ticker}`] || {};
@@ -1458,7 +1427,6 @@ async function storeFintelDataIfChanged(ticker, newFintelData) {
     const fintelFields = [
       'shortInterest',
       'shortInterestRatio', 
-      'shortInterestPercentFloat',
       'costToBorrow',
       'failureToDeliver',
       'shortSharesAvailable',
@@ -1529,4 +1497,36 @@ async function storeFintelDataIfChanged(ticker, newFintelData) {
   } catch (error) {
     console.error('❌ Error storing Fintel data:', error);
   }
+}
+
+// Convert common share count fields (e.g., "1.2M", "167,565,108") to absolute numbers
+function normalizeFintelNumericFields(data) {
+  try {
+    const out = { ...data };
+    const keys = ['finraExemptVolume', 'shortSharesAvailable', 'failureToDeliver'];
+    keys.forEach(k => {
+      if (out[k] != null && typeof out[k] !== 'number') {
+        const parsed = parseSharesToAbsolute(out[k]);
+        if (parsed != null) out[k] = parsed;
+      }
+    });
+    return out;
+  } catch {
+    return data;
+  }
+}
+
+function parseSharesToAbsolute(val) {
+  try {
+    const s = String(val).replace(/shares?/ig, '').trim();
+    const m = s.match(/([0-9][\d.,]*)\s*([KMB])?/i);
+    if (!m) return null;
+    const raw = parseFloat(m[1].replace(/,/g, ''));
+    const unit = (m[2] || '').toUpperCase();
+    if (isNaN(raw)) return null;
+    if (unit === 'B') return Math.round(raw * 1e9);
+    if (unit === 'M' || unit === '') return Math.round(raw * 1e6);
+    if (unit === 'K') return Math.round(raw * 1e3);
+    return Math.round(raw);
+  } catch { return null; }
 }

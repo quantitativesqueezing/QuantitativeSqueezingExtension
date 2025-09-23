@@ -100,7 +100,7 @@
     const fields = [
       'latestFloat','sharesOutstanding','estimatedCash','shortInterest','shortInterestRatio','shortInterestPercentFloat',
       'costToBorrow','shortSharesAvailable','finraExemptVolume','failureToDeliver',
-      'sector','industry','country','exchange','marketCap','enterpriseValue','estimatedNetCashPerShare','lastDataUpdate',
+      'sector','industry','country','exchange','optionsTradingEnabled','marketCap','enterpriseValue','lastDataUpdate', //'estimatedNetCashPerShare',
       // Derived from tables (most recent row)
       'latestCTB','latestFTD',
       // Derived metrics
@@ -117,26 +117,24 @@
       if (derived.latestFTD) shallow.latestFTD = derived.latestFTD;
     } catch {}
 
-    // Compute shortInterestPercentFloat = shortInterest / latestFloat * 100
+    // Compute shortInterestPercentFloat = shortInterest / Free Float (stored as percentage string)
     try {
-      const siShares = parseSharesToNumber(shallow.shortInterest);
-      const floatM = typeof shallow.float === 'number' ? shallow.float : parseNumUnitToMillions(shallow.float);
-      if (siShares && floatM) {
-        const pct = ((siShares / floatM) * 100);
-        shallow.shortInterestPercentFloat = `${pct.toFixed(2)}%`;
+      const siShares = toAbsoluteShares(shallow.shortInterest);
+      const floatSource = shallow.latestFloat != null ? shallow.latestFloat : shallow.float;
+      const floatShares = toAbsoluteShares(floatSource, { assumeMillions: true });
+      if (siShares != null && floatShares && floatShares > 0) {
+        const pctString = formatPercentDisplay((siShares / floatShares));
+        shallow.shortInterestPercentFloat = pctString;
+        if (data && typeof data === 'object') data.shortInterestPercentFloat = pctString;
       }
     } catch {}
-
-    // Compute RegSHO Min FTDs = sharesOutstanding * 0.05 (display in M/B)
+471005.11
+    // Compute RegSHO Min FTDs = sharesOutstanding * 0.005 (display with commas)
     try {
-      console.log(shallow);
-      const soM = typeof shallow.sharesOutstanding === 'number' ? shallow.sharesOutstanding : parseNumUnitToMillions(shallow.sharesOutstanding);
-      console.log(soM);
-      if (soM) {
-        const minM = soM * 0.05;
-        shallow.regShoMinFtds = formatMillionsToUnitString(minM);
-        console.log(shallow);
-        console.log('---------');
+      const soAbs = parseSharesToNumber(shallow.sharesOutstanding);
+      if (soAbs) {
+        const minShares = Math.round(soAbs * 0.005);
+        shallow.regShoMinFtds = minShares;
       }
     } catch {}
     // Repair sharesOutstanding if it numerically equals latestFloat (handles string or number)
@@ -158,14 +156,40 @@
       const kEl = document.createElement('div'); kEl.className = 'k'; kEl.textContent = kElTitle;
       const vEl = document.createElement('div'); vEl.className = 'v';
       let val = shallow[k];
-      if (k === 'estimatedCash' || k === 'currentCash') {
+      // Display-only formatting for Short Interest (commas)
+      if (k === 'shortInterest') {
+        vEl.textContent = formatShortInterestDisplay(val);
+        grid.appendChild(kEl); grid.appendChild(vEl); usedLabels.add(kElTitle); return;
+      }
+
+      // Display-only: format Free Float and Shares Outstanding as M/B based on absolute shares
+      if (k === 'latestFloat' || k === 'float' || k === 'sharesOutstanding') {
+        const abs = parseSharesToNumber(val);
+        if (abs != null) {
+          vEl.textContent = formatAbsSharesToMB(abs) + ' shares';
+          grid.appendChild(kEl); grid.appendChild(vEl); usedLabels.add(kElTitle); return;
+        }
+      }
+      if (k === 'estimatedCash') {
+        vEl.textContent = formatCashToMBDisplay(val);
+      }
+      else if (k === 'shortInterestPercentFloat') {
+        vEl.textContent = formatPercentDisplay(val);
+      }
+      else if (k === 'currentCash') {
         vEl.textContent = `$${val}`;
+      }
+      else if (k === 'optionsTradingEnabled') {
+        vEl.textContent = formatOptionsTradingStatus(val);
+      }
+      else if (k === 'regShoMinFtds') {
+        vEl.textContent = formatRegShoShares(val);
       }
       else if (k === 'marketCap') {
-        vEl.textContent = `$${val}`;
+        vEl.textContent = formatCashToMBDisplay(val);
       }
       else if (k === 'enterpriseValue' || k === 'ev') {
-        vEl.textContent = `$${val}`;
+        vEl.textContent = formatCashToMBDisplay(val);
       } else {
         vEl.textContent = String(val);
       }
@@ -225,7 +249,7 @@
       // Tables (not collapsed)
       if (Array.isArray(payload.tables) && payload.tables.length) {
         const block = document.createElement('div');
-        const title = document.createElement('div'); title.className = 'key'; title.textContent = 'Tables'; block.appendChild(title);
+        const title = document.createElement('div'); title.className = 'key'; title.textContent = ''; block.appendChild(title);
         // Order tables as requested, then render with View More (5 rows initially)
         const order = {
           'table-short-borrow-rate': 0, // Cost To Borrow (IBKR)
@@ -340,6 +364,7 @@
       'enterprise value': 'E/V',
       'ev': 'E/V',
       'enterpriseValue': 'E/V',
+      'optionsTradingEnabled': 'Options Trading',
       'last update': 'Last Updated',
       'data as of': 'Last Updated',
       'as of': 'Last Updated',
@@ -426,6 +451,64 @@
     return raw;
   }
 
+  // Format absolute shares to M/B string (e.g., 900000 -> 0.9M, 10400000 -> 10.4M, 1750000000 -> 1.75B)
+  function formatAbsSharesToMB(n) {
+    const num = Number(n);
+    if (!isFinite(num)) return String(n);
+    if (num >= 1e9) return trimZeros((num / 1e9).toFixed(2)) + 'B';
+    return trimZeros((num / 1e6).toFixed(2)) + 'M';
+  }
+
+  function formatCashToMBDisplay(value) {
+    if (value == null) return '';
+    const cleaned = typeof value === 'string' ? value.replace(/\$/g, '') : value;
+    const num = (typeof cleaned === 'number' && isFinite(cleaned)) ? cleaned : parseAbbrevNumber(String(cleaned));
+    if (!Number.isFinite(num)) return String(value);
+    const sign = num < 0 ? '-' : '';
+    const abs = Math.abs(num);
+    const unit = abs >= 1e9
+      ? trimZeros((abs / 1e9).toFixed(2)) + 'B'
+      : trimZeros((abs / 1e6).toFixed(2)) + 'M';
+    return `${sign}$${unit}`;
+  }
+
+  // Convert stored/share-like values to absolute share counts.
+  function toAbsoluteShares(value, opts = {}) {
+    const assumeMillions = !!opts.assumeMillions;
+    if (value == null) return null;
+    if (typeof value === 'number') {
+      if (!isFinite(value)) return null;
+      if (Math.abs(value) >= 1e6) return Math.round(value);
+      if (assumeMillions) return Math.round(value * 1e6);
+      return Math.round(value);
+    }
+    const cleaned = String(value)
+      .replace(/shares?/ig, '')
+      .replace(/\$/g, '')
+      .replace(/,/g, '')
+      .trim();
+    if (!cleaned) return null;
+    const match = cleaned.match(/^([+-]?\d+(?:\.\d+)?)([KMB])?$/i);
+    if (match) {
+      const raw = parseFloat(match[1]);
+      if (!isFinite(raw)) return null;
+      const unit = match[2] ? match[2].toUpperCase() : null;
+      if (unit === 'B') return Math.round(raw * 1e9);
+      if (unit === 'M') return Math.round(raw * 1e6);
+      if (unit === 'K') return Math.round(raw * 1e3);
+      if (Math.abs(raw) >= 1e6) return Math.round(raw);
+      if (assumeMillions) return Math.round(raw * 1e6);
+      return Math.round(raw);
+    }
+    const numeric = parseFloat(cleaned);
+    if (!isNaN(numeric)) {
+      if (Math.abs(numeric) >= 1e6) return Math.round(numeric);
+      if (assumeMillions) return Math.round(numeric * 1e6);
+      return Math.round(numeric);
+    }
+    return null;
+  }
+
   function parseSharesToNumber(s) {
     if (s == null) return null;
     const m = String(s).match(/([0-9][\d.,]*)\s*([KMB])?/i);
@@ -434,7 +517,7 @@
     const unit = (m[2] || '').toUpperCase();
     if (isNaN(raw)) return null;
     if (unit === 'B') return raw * 1e9;
-    if (unit === 'M' || unit === '') return raw * 1e6;
+    if (unit === 'M') return raw * 1e6;
     if (unit === 'K') return raw * 1e3;
     return raw; // default raw shares
   }
@@ -451,7 +534,46 @@
     }
     return trimZeros(n.toFixed(2)) + 'M';
   }
-  
+
+  function formatOptionsTradingStatus(value) {
+    if (value === true || value === 'true' || value === 'Yes' || value === 'Yes') return 'Yes';
+    if (value === false || value === 'false' || value === 'No' || value === 'No') return 'No';
+    return 'Unknown';
+  }
+
+  function formatRegShoShares(value) {
+    const num = parseSharesToNumber(value);
+    if (num != null && isFinite(num)) return `${Math.round(num).toLocaleString()} shares`;
+    return 'N/A';
+  }
+
+  function formatShortInterestDisplay(value) {
+    const num = parseSharesToNumber(value);
+    if (num != null && isFinite(num)) return `${Math.round(num).toLocaleString()} shares`;
+    if (value == null) return 'N/A';
+    const cleaned = String(value).replace(/shares?/ig, '').trim();
+    if (cleaned && !/^n\/?a$/i.test(cleaned)) return `${cleaned} shares`;
+    return 'N/A';
+  }
+
+  function formatPercentDisplay(value) {
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (trimmed.endsWith('%')) return trimmed;
+      const parsed = parseFloat(trimmed);
+      if (Number.isFinite(parsed)) {
+        const pct = trimmed.includes('%') || parsed > 1 ? parsed : parsed * 100;
+        return `${trimZeros(pct.toFixed(2))}%`;
+      }
+    }
+    const num = Number(value);
+    if (Number.isFinite(num)) {
+      const pct = num > 1 ? num : num * 100;
+      return `${trimZeros(pct.toFixed(2))}%`;
+    }
+    return 'N/A';
+  }
+
   /**
   * Parse numbers with financial suffixes, e.g. "50M", "15.8B", "100", "-2.5K"
   * Supported suffixes: K (thousand), M (million), B (billion), T (trillion)
@@ -662,6 +784,27 @@
     await cleanupStorage({ silent: true });
     const data = await getStoredForTicker(ticker);
     renderData(ticker, data);
+
+    if (ticker) {
+      try {
+        chrome.runtime.sendMessage({ type: 'fetch-pack', symbol: ticker }, (resp) => {
+          if (chrome.runtime.lastError) return;
+          if (!resp || typeof resp !== 'object') return;
+          const merged = { ...(data || {}) };
+          let changed = false;
+          Object.entries(resp).forEach(([k, v]) => {
+            if (v === null || v === undefined) return;
+            if (merged[k] !== v) {
+              merged[k] = v;
+              changed = true;
+            }
+          });
+          if (changed) renderData(ticker, merged);
+        });
+      } catch (e) {
+        console.warn('fetch-pack refresh failed', e);
+      }
+    }
   }
 
   // --- Cleanup: purge blacklisted value keys across all tickers ---
@@ -700,10 +843,27 @@
             const crawl = obj.pageCrawls[host];
             if (!crawl || typeof crawl !== 'object') continue;
             if (crawl.values && typeof crawl.values === 'object') {
-              Object.keys(crawl.values).forEach(k => { if (isBlacklistedValueKey(k)) delete crawl.values[k]; });
+              Object.keys(crawl.values).forEach(k => {
+                if (isBlacklistedValueKey(k)) { delete crawl.values[k]; return; }
+                const arr = crawl.values[k];
+                if (Array.isArray(arr)) {
+                  arr.forEach(occ => {
+                    if (!occ) return;
+                    // Convert numeric-like strings to absolute numbers (e.g., 12.4M -> 12400000)
+                    const v = occ.value;
+                    const abs = numAbsAny(v);
+                    if (abs != null) occ.value = abs;
+                  });
+                }
+              });
             }
             if (crawl.inferred && typeof crawl.inferred === 'object') {
-              Object.keys(crawl.inferred).forEach(k => { if (isBlacklistedValueKey(k)) delete crawl.inferred[k]; });
+              Object.keys(crawl.inferred).forEach(k => {
+                if (isBlacklistedValueKey(k)) { delete crawl.inferred[k]; return; }
+                const v = crawl.inferred[k];
+                const abs = numAbsAny(v);
+                if (abs != null) crawl.inferred[k] = abs;
+              });
             }
             // Remove empty "Values" tables
             if (Array.isArray(crawl.tables)) {
@@ -718,6 +878,28 @@
             }
           }
         }
+
+        // Migrate numeric-like fields to absolute numbers (one-time migration)
+        try {
+          const numAbs = (s) => {
+            const m = String(s).match(/([0-9][\d.,]*)\s*([KMBT])?/i);
+            if (!m) return null;
+            const raw = parseFloat(m[1].replace(/,/g, ''));
+            const unit = (m[2] || '').toUpperCase();
+            if (isNaN(raw)) return null;
+            const mult = unit === 'T' ? 1e12 : unit === 'B' ? 1e9 : unit === 'M' ? 1e6 : unit === 'K' ? 1e3 : 1;
+            return Math.round(raw * mult);
+          };
+          // Float & OS (convert M/B strings or plain numbers to absolute count of shares)
+          if (typeof obj.latestFloat === 'string') { const v = numAbs(obj.latestFloat); if (v != null) obj.latestFloat = v; }
+          if (typeof obj.sharesOutstanding === 'string') { const v = numAbs(obj.sharesOutstanding); if (v != null) obj.sharesOutstanding = v; }
+          // Estimated cash to absolute dollars
+          if (typeof obj.estimatedCash === 'string') { const v = numAbs(obj.estimatedCash); if (v != null) obj.estimatedCash = v; }
+          // Fintel numeric-like fields to absolute shares
+          ['shortSharesAvailable','finraExemptVolume','failureToDeliver'].forEach(f => {
+            if (typeof obj[f] === 'string') { const v = numAbs(obj[f]); if (v != null) obj[f] = v; }
+          });
+        } catch {}
 
         // Fix previously mis-saved exchange values (e.g., huge concatenated strings)
         if (typeof obj.exchange === 'string' && looksBadExchange(obj.exchange)) {
@@ -741,6 +923,20 @@
       if (!opts.silent) setStatus('Cleanup failed', true);
       return 0;
     }
+  }
+
+  // Convert strings with K/M/B/T (and optional $ or commas) to absolute numbers. Returns null if not numeric-like.
+  function numAbsAny(s) {
+    if (s == null) return null;
+    if (typeof s === 'number' && isFinite(s)) return s;
+    const str = String(s).replace(/\$/g, '').trim();
+    const m = str.match(/([+-]?[0-9][\d.,]*)\s*([KMBT])?/i);
+    if (!m) return null;
+    const raw = parseFloat(m[1].replace(/,/g, ''));
+    const unit = (m[2] || '').toUpperCase();
+    if (isNaN(raw)) return null;
+    const mult = unit === 'T' ? 1e12 : unit === 'B' ? 1e9 : unit === 'M' ? 1e6 : unit === 'K' ? 1e3 : 1;
+    return Math.round(raw * mult);
   }
 
   function isTableEffectivelyEmpty(t) {

@@ -232,13 +232,26 @@ async function extractTickerData(ticker) {
         addVerificationIcons(ticker, floatData);
       }, 500);
       
-      // Prepare storage-safe copy: store Float/OS with unit suffix (M/B)
+      // Prepare storage-safe copy: store as absolute numbers (e.g., 12.4M -> 12400000)
       const storeReady = { ...floatData };
       if (typeof storeReady.latestFloat === 'number') {
-        storeReady.latestFloat = formatMillionsToUnitString(storeReady.latestFloat);
+        storeReady.latestFloat = Math.round(storeReady.latestFloat * 1e6);
       }
       if (typeof storeReady.sharesOutstanding === 'number') {
-        storeReady.sharesOutstanding = formatMillionsToUnitString(storeReady.sharesOutstanding);
+        storeReady.sharesOutstanding = Math.round(storeReady.sharesOutstanding * 1e6);
+      }
+      // estimatedCash may be string with unit; convert to absolute dollars if possible
+      if (storeReady.estimatedCash != null) {
+        const m = String(storeReady.estimatedCash).match(/([0-9][\d.,]*)\s*([KMB])?/i);
+        if (m) {
+          const raw = parseFloat(m[1].replace(/,/g, ''));
+          const unit = (m[2] || 'M').toUpperCase();
+          let dollars = raw;
+          if (unit === 'B') dollars = raw * 1e9;
+          else if (unit === 'M') dollars = raw * 1e6;
+          else if (unit === 'K') dollars = raw * 1e3;
+          if (!isNaN(dollars)) storeReady.estimatedCash = Math.round(dollars);
+        }
       }
       // Check if data has changed before storing
       await storeTickerDataIfChanged(ticker, storeReady);

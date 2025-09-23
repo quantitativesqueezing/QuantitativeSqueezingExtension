@@ -34,7 +34,60 @@ try {
 }
 
 const CACHE_TTL_MS = 10 * 60 * 1000;
+const OPTIONS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const cache = new Map(); // symbol -> { fetchedAt, float, shortInterest, ctb, ftd }
+
+async function getOptionsTradingEnabled(symbol) {
+  try {
+    const key = `options_meta_${symbol}`;
+    const now = Date.now();
+    const existing = await chrome.storage.local.get(key);
+    const cached = existing[key];
+    if (cached && cached.timestamp && (now - cached.timestamp) < OPTIONS_CACHE_TTL_MS) {
+      return cached.enabled;
+    }
+
+    const endpoints = [
+      `https://cdn.cboe.com/api/global/delayed_quotes/options/${encodeURIComponent(symbol)}.json`,
+      `https://www.cboe.com/delayed_quote/api/options/${encodeURIComponent(symbol)}`
+    ];
+
+    let enabled = null;
+    let sawAccessDenied = false;
+
+    for (const url of endpoints) {
+      try {
+        const res = await fetch(url, { cache: 'no-cache' });
+        if (res.ok) {
+          await res.json();
+          enabled = true;
+          break;
+        }
+        if (res.status === 403 || res.status === 404) {
+          sawAccessDenied = true;
+          continue;
+        }
+        console.warn(`⚠️ Options lookup unexpected status for ${symbol} via ${url}:`, res.status);
+      } catch (err) {
+        console.error(`❌ Options lookup failed for ${symbol} via ${url}:`, err);
+      }
+    }
+
+    if (enabled === null && sawAccessDenied) {
+      enabled = false;
+    }
+
+    if (enabled !== null) {
+      await chrome.storage.local.set({ [key]: { enabled, timestamp: now } });
+      return enabled;
+    }
+
+    return cached && typeof cached.enabled === 'boolean' ? cached.enabled : null;
+  } catch (err) {
+    console.error(`❌ getOptionsTradingEnabled error for ${symbol}:`, err);
+    return null;
+  }
+}
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   console.log(`🔧 Service worker: Received message:`, msg);
@@ -153,6 +206,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 async function fetchPack(symbol) {
   const now = Date.now();
   const key = symbol.toUpperCase();
+  const storageKey = `ticker_${key}`;
 
   /*const cached = cache.get(key);
   if (cached && (now - cached.fetchedAt) < CACHE_TTL_MS) {
@@ -168,15 +222,16 @@ async function fetchPack(symbol) {
   ]);
 
   // Get estimated cash from stored data
-  const storedResult = await chrome.storage.local.get(`ticker_${key}`);
-  const storedData = storedResult[`ticker_${key}`];
-  
+  const storedResult = await chrome.storage.local.get(storageKey);
+  let storedData = storedResult[storageKey];
+  let workingData = storedData ? { ...storedData } : null;
+  let storageMutated = false;
+
   console.log(`🔧 Service Worker: Retrieved stored data for ${key}:`, storedData);
   if (storedData) {
     console.log(`🎯 Service Worker: Available fintel fields:`, {
       shortInterest: storedData.shortInterest,
       shortInterestRatio: storedData.shortInterestRatio,
-      shortInterestPercentFloat: storedData.shortInterestPercentFloat,
       costToBorrow: storedData.costToBorrow,
       shortSharesAvailable: storedData.shortSharesAvailable,
       finraExemptVolume: storedData.finraExemptVolume,
@@ -209,30 +264,158 @@ async function fetchPack(symbol) {
     } catch { return null; }
   }
 
+  const optionsEnabledRaw = await getOptionsTradingEnabled(key);
+  const optionsEnabled = optionsEnabledRaw === null ? null : !!optionsEnabledRaw;
+  if (optionsEnabled !== null) {
+    if (!workingData) workingData = {};
+    if (workingData.optionsTradingEnabled !== optionsEnabled) {
+      workingData.optionsTradingEnabled = optionsEnabled;
+      storageMutated = true;
+    }
+  }
+
+  const floatRaw = valueOrNull(floatVal);
+  const shortInterestRaw = valueOrNull(siVal);
+  const costToBorrowRaw = valueOrNull(ctbVal);
+  const ftdRaw = valueOrNull(ftdVal);
+  const shortBorrowRateTable = Array.isArray(storedData?.shortBorrowRateTable) ? storedData.shortBorrowRateTable : null;
+
+  const floatAbs = firstNonNull(
+    parseShares(storedData?.latestFloat),
+    parseShares(floatRaw)
+  );
+
+  const sharesOutstandingAbs = firstNonNull(
+    parseShares(storedData?.sharesOutstanding),
+    parseShares(pickFromCrawlsTop(storedData, 'sharesOutstanding'))
+  );
+
+  const shortInterestAbs = firstNonNull(
+    parseShares(storedData?.shortInterest),
+    parseShares(shortInterestRaw)
+  );
+
+  const shortInterestFormatted = firstNonNull(
+    formatSharesString(shortInterestRaw),
+    formatSharesString(storedData?.shortInterest),
+    shortInterestAbs != null ? Math.round(shortInterestAbs).toLocaleString() : null
+  );
+
+  if (shortInterestFormatted) {
+    if (!workingData) workingData = storedData ? { ...storedData } : {};
+    if (workingData.shortInterest !== shortInterestFormatted) {
+      workingData.shortInterest = shortInterestFormatted;
+      storageMutated = true;
+    }
+  } else if (workingData && Object.prototype.hasOwnProperty.call(workingData, 'shortInterest')) {
+    delete workingData.shortInterest;
+    storageMutated = true;
+  }
+
+  const shortSharesAvailableAbs = firstNonNull(
+    parseShares(storedData?.shortSharesAvailable),
+    parseShares(pickFromCrawlsTop(storedData, 'shortSharesAvailable'))
+  );
+
+  const finraExemptVolumeAbs = firstNonNull(
+    parseShares(storedData?.finraExemptVolume),
+    parseShares(pickFromCrawlsTop(storedData, 'finraExemptVolume'))
+  );
+
+  const failureToDeliverAbs = firstNonNull(
+    parseShares(storedData?.failureToDeliver),
+    parseShares(ftdRaw),
+    parseShares(pickFromCrawlsTop(storedData, 'failureToDeliver'))
+  );
+
+  const estimatedCashDollars = firstNonNull(
+    parseDollars(storedData?.estimatedCash),
+    parseDollars(pickFromCrawlsTop(storedData, 'estimatedCash'))
+  );
+
+  const marketCapDollars = firstNonNull(
+    parseDollars(storedData?.marketCap),
+    parseDollars(pickFromCrawlsTop(storedData, 'marketCap'))
+  );
+
+  const enterpriseValueDollars = firstNonNull(
+    parseDollars(storedData?.enterpriseValue),
+    parseDollars(pickFromCrawlsTop(storedData, 'enterpriseValue'))
+  );
+
+  const estimatedNetCashPerShareVal = firstNonNull(
+    parseNumber(storedData?.estimatedNetCashPerShare),
+    parseNumber(pickFromCrawlsTop(storedData, 'estimatedNetCashPerShare'))
+  );
+
+  const costToBorrowPercent = deriveCostToBorrowPercent(shortBorrowRateTable, costToBorrowRaw, storedData?.costToBorrow);
+
+  const shortInterestRatioDays = firstNonNull(
+    parseNumber(storedData?.shortInterestRatio),
+    parseNumber(pickFromCrawlsTop(storedData, 'shortInterestRatio'))
+  );
+
+  const institutionalOwnershipPercent = firstNonNull(
+    parsePercent(storedData?.institutionalOwnership),
+    parsePercent(pickFromCrawlsTop(storedData, 'institutionalOwnership'))
+  );
+
+  const regShoMinFtdsAbs = (typeof sharesOutstandingAbs === 'number' && isFinite(sharesOutstandingAbs) && sharesOutstandingAbs > 0)
+    ? sharesOutstandingAbs * 0.005
+    : null;
+
+  const shortFloatPercent = (typeof shortInterestAbs === 'number' && typeof floatAbs === 'number' && floatAbs > 0)
+    ? formatPercentTwoDecimals((shortInterestAbs / floatAbs) * 100)
+    : null;
+  if (shortFloatPercent) {
+    if (!workingData) workingData = {};
+    if (workingData.shortInterestPercentFloat !== shortFloatPercent) {
+      workingData.shortInterestPercentFloat = shortFloatPercent;
+      storageMutated = true;
+    }
+  }
+  else if (workingData && workingData.shortInterestPercentFloat) {
+    delete workingData.shortInterestPercentFloat;
+    storageMutated = true;
+  }
+
+  if (storageMutated && workingData) {
+    await chrome.storage.local.set({ [storageKey]: workingData });
+    storedData = workingData;
+  } else if (workingData) {
+    storedData = workingData;
+  }
+
+  const packShortInterestDisplay = shortInterestFormatted
+    || normalizeSharesString(shortInterestRaw)
+    || (typeof storedData?.shortInterest === 'string' ? storedData.shortInterest : null);
+
   const pack = {
     fetchedAt: storedData?.lastUpdated || now,
-    float: valueOrNull(floatVal),
-    shortInterest: valueOrNull(siVal),
-    ctb: valueOrNull(ctbVal),
-    ftd: storedData?.estimatedCash ? `$${storedData.estimatedCash}` : valueOrNull(ftdVal),
-    // Enhanced Fintel.io fields from stored data
-    shortInterestRatio: storedData?.shortInterestRatio || 'N/A',
-    shortInterestPercentFloat: storedData?.shortInterestPercentFloat || 'N/A',
-    costToBorrow: storedData?.costToBorrow || valueOrNull(ctbVal),
-    shortSharesAvailable: storedData?.shortSharesAvailable || 'N/A',
-    finraExemptVolume: storedData?.finraExemptVolume || 'N/A',
-    failureToDeliver: storedData?.failureToDeliver || valueOrNull(ftdVal),
-    lastDataUpdate: storedData?.lastDataUpdate || pickFromCrawlsTop(storedData, 'lastDataUpdate') || 'N/A',
-    // Additional fields from stored data
-    sharesOutstanding: storedData?.sharesOutstanding || 'N/A',
-    estimatedCash: storedData?.estimatedCash ? `$${storedData.estimatedCash}` : (pickFromCrawlsTop(storedData, 'estimatedCash') ? `$${pickFromCrawlsTop(storedData, 'estimatedCash')}` : 'N/A'),
-    marketCap: storedData?.marketCap || pickFromCrawlsTop(storedData, 'marketCap') || 'N/A',
-    enterpriseValue: storedData?.enterpriseValue || pickFromCrawlsTop(storedData, 'enterpriseValue') || 'N/A',
-    sector: storedData?.sector || pickFromCrawlsTop(storedData, 'sector') || 'N/A',
-    industry: storedData?.industry || pickFromCrawlsTop(storedData, 'industry') || 'N/A',
-    country: storedData?.country || pickFromCrawlsTop(storedData, 'country') || 'N/A',
-    exchange: storedData?.exchange || pickFromCrawlsTop(storedData, 'exchange') || 'N/A',
-    institutionalOwnership: storedData?.institutionalOwnership || pickFromCrawlsTop(storedData, 'institutionalOwnership') || 'N/A',
+    float: floatAbs ?? null,
+    shortInterest: packShortInterestDisplay ?? null,
+    shortInterestRatio: shortInterestRatioDays ?? null,
+    shortInterestPercentFloat: shortFloatPercent,
+    costToBorrow: costToBorrowPercent ?? null,
+    shortSharesAvailable: shortSharesAvailableAbs ?? null,
+    finraExemptVolume: finraExemptVolumeAbs ?? null,
+    failureToDeliver: failureToDeliverAbs ?? null,
+    regShoMinFtds: regShoMinFtdsAbs ?? null,
+    lastDataUpdate: storedData?.lastDataUpdate || pickFromCrawlsTop(storedData, 'lastDataUpdate') || null,
+    sharesOutstanding: sharesOutstandingAbs ?? null,
+    estimatedCash: estimatedCashDollars ?? null,
+    marketCap: marketCapDollars ?? null,
+    enterpriseValue: enterpriseValueDollars ?? null,
+    estimatedNetCashPerShare: estimatedNetCashPerShareVal ?? null,
+    shortBorrowRateTable: storedData?.shortBorrowRateTable || null,
+    failsToDeliverTable: storedData?.failsToDeliverTable || null,
+    shortSharesAvailabilityTable: storedData?.shortSharesAvailabilityTable || null,
+    sector: storedData?.sector || pickFromCrawlsTop(storedData, 'sector') || null,
+    industry: storedData?.industry || pickFromCrawlsTop(storedData, 'industry') || null,
+    country: storedData?.country || pickFromCrawlsTop(storedData, 'country') || null,
+    exchange: storedData?.exchange || pickFromCrawlsTop(storedData, 'exchange') || null,
+    institutionalOwnership: institutionalOwnershipPercent ?? null,
+    optionsTradingEnabled: optionsEnabled,
     regularMarketChange: storedData?.regularMarketChange || null,
     extendedMarketChange: storedData?.extendedMarketChange || null
   };
@@ -241,7 +424,6 @@ async function fetchPack(symbol) {
   console.log(`🔍 Service Worker: Key fintel fields in pack:`, {
     shortInterest: pack.shortInterest,
     shortInterestRatio: pack.shortInterestRatio,
-    shortInterestPercentFloat: pack.shortInterestPercentFloat,
     costToBorrow: pack.costToBorrow,
     finraExemptVolume: pack.finraExemptVolume
   });
@@ -252,6 +434,136 @@ async function fetchPack(symbol) {
 
 function valueOrNull(p) {
   return p.status === 'fulfilled' ? (p.value ?? null) : null;
+}
+
+function firstNonNull(...values) {
+  for (const value of values) {
+    if (value === null || value === undefined) continue;
+    if (typeof value === 'number') {
+      if (Number.isFinite(value)) return value;
+      continue;
+    }
+    if (typeof value === 'string' && value.trim().toLowerCase() === 'n/a') continue;
+    if (value !== '') return value;
+  }
+  return null;
+}
+
+function parseShares(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return null;
+    if (!Number.isInteger(value) && Math.abs(value) < 1e6) {
+      return value * 1e6;
+    }
+    return value;
+  }
+  const cleaned = String(value)
+    .replace(/shares?/ig, '')
+    .replace(/,/g, '')
+    .trim();
+  if (!cleaned) return null;
+  const match = cleaned.match(/^([+-]?\d+(?:\.\d+)?)([KMB])?$/i);
+  if (match) {
+    const raw = parseFloat(match[1]);
+    if (!Number.isFinite(raw)) return null;
+    const unit = match[2] ? match[2].toUpperCase() : '';
+    const multiplier = unit === 'B' ? 1e9 : unit === 'M' ? 1e6 : unit === 'K' ? 1e3 : 1;
+    if (!unit && cleaned.includes('.') && Math.abs(raw) < 1e6) {
+      return raw * 1e6;
+    }
+    return raw * multiplier;
+  }
+  const numeric = parseFloat(cleaned);
+  if (!Number.isFinite(numeric)) return null;
+  if (cleaned.includes('.') && Math.abs(numeric) < 1e6) {
+    return numeric * 1e6;
+  }
+  return numeric;
+}
+
+function formatSharesString(value) {
+  const num = parseShares(value);
+  if (num == null) return null;
+  return Math.round(num).toLocaleString();
+}
+
+function normalizeSharesString(value) {
+  if (value == null) return null;
+  const str = String(value).replace(/shares?/ig, '').trim();
+  if (!str) return null;
+  if (/^n\/?a$/i.test(str)) return null;
+  return str;
+}
+
+function parseDollars(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+  const cleaned = String(value)
+    .replace(/[$,]/g, '')
+    .trim();
+  if (!cleaned) return null;
+  const match = cleaned.match(/^([+-]?\d+(?:\.\d+)?)([KMBT])?$/i);
+  if (match) {
+    const raw = parseFloat(match[1]);
+    if (!Number.isFinite(raw)) return null;
+    const unit = match[2] ? match[2].toUpperCase() : '';
+    const multiplier = unit === 'T' ? 1e12 : unit === 'B' ? 1e9 : unit === 'M' ? 1e6 : unit === 'K' ? 1e3 : 1;
+    return raw * multiplier;
+  }
+  const numeric = parseFloat(cleaned);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function parsePercent(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+  const match = String(value).replace(/,/g, '').match(/([+-]?\d+(?:\.\d+)?)/);
+  if (!match) return null;
+  const numeric = parseFloat(match[1]);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function parseNumber(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+  const match = String(value).replace(/,/g, '').match(/([+-]?\d+(?:\.\d+)?)/);
+  if (!match) return null;
+  const numeric = parseFloat(match[1]);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function deriveCostToBorrowPercent(tableRows, rawValue, storedValue) {
+  if (Array.isArray(tableRows) && tableRows.length) {
+    const firstRow = tableRows[0] || {};
+    const candidates = ['Latest', 'latest', 'Borrow Rate', 'Fee', 'Rate'];
+    for (const key of candidates) {
+      if (firstRow[key] != null && String(firstRow[key]).trim() !== '') {
+        const parsed = parsePercent(firstRow[key]);
+        if (parsed != null) return parsed;
+      }
+    }
+    const vals = Object.values(firstRow).filter(v => v != null && String(v).trim() !== '');
+    if (vals.length) {
+      const parsed = parsePercent(vals[0]);
+      if (parsed != null) return parsed;
+    }
+  }
+  const fallback = parsePercent(rawValue);
+  if (fallback != null) return fallback;
+  return parsePercent(storedValue);
+}
+
+function formatPercentTwoDecimals(value) {
+  if (!Number.isFinite(value)) return null;
+  const fixed = value.toFixed(2);
+  return `${fixed.replace(/\.00$/, '').replace(/(\.\d)0$/, '$1')}%`;
 }
 
 /* ---------------------------
