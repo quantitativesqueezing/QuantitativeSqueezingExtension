@@ -41,6 +41,12 @@
       "run_at": "document_idle"
     }
   ],
+  "web_accessible_resources": [
+    {
+      "resources": ["squeezeScore.js"],
+      "matches": ["<all_urls>"]
+    }
+  ],
   "action": {
     "default_title": "Quantitative Squeezing Insights",
     "default_popup": "popup.html"

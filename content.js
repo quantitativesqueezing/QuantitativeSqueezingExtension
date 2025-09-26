@@ -50,6 +50,36 @@ let lastSymbol = null;
 let rafId = null;
 let hideTimeout = null;
 let lastReferenceRect = null;
+let squeezeScoreModulePromise = null;
+let hoverIntentSymbol = null;
+
+function loadSqueezeScoreModule() {
+  if (!squeezeScoreModulePromise) {
+    const url = (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.getURL)
+      ? chrome.runtime.getURL('squeezeScore.js')
+      : './squeezeScore.js';
+    squeezeScoreModulePromise = import(url).catch(err => {
+      console.error('❌ Failed to load squeezeScore module:', err);
+      return null;
+    });
+  }
+  return squeezeScoreModulePromise;
+}
+
+function parsePercentNumber(value) {
+  if (value === null || value === undefined) return NaN;
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : NaN;
+  }
+  const text = String(value).trim();
+  if (!text) return NaN;
+  const match = text.replace(/,/g, '').match(/([+-]?\d+(?:\.\d+)?)/);
+  if (!match) return NaN;
+  const num = parseFloat(match[1]);
+  if (!Number.isFinite(num)) return NaN;
+  if (text.includes('%')) return num;
+  return num > 1 ? num : num * 100;
+}
 
 function cancelHideTimer() {
   if (hideTimeout) {
@@ -73,6 +103,7 @@ function ensureTooltip() {
         <div class="shi-header-links">
           <a href="#" class="refresh-data-link dilutiontracker" target="_blank" rel="noopener noreferrer">DilutionTracker</a>
           <a href="#" class="refresh-data-link fintel" target="_blank" rel="noopener noreferrer">Fintel</a>
+          <button type="button" class="refresh-data-link refresh-button">Refresh</button>
         </div>
       </div>
       <div class="shi-price-changes">
@@ -92,6 +123,7 @@ function ensureTooltip() {
             <div class="shi-row"><span>Short Interest Ratio:</span><span class="shi-short-interest-ratio">—</span></div>
             <div class="shi-row"><span>Short Float %:</span><span class="shi-short-interest-percent-float">—</span></div>
             <div class="shi-row"><span>Cost To Borrow:</span><span class="shi-cost-to-borrow">—</span></div>
+            <div class="shi-row"><span>Squeeze Score:</span><span class="shi-squeeze-score">—</span></div>
             <div class="shi-row"><span>Short Shares Available:</span><span class="shi-short-shares-available">—</span></div>
             <div class="shi-row"><span>Short-Exempt Volume:</span><span class="shi-finra-exempt-volume">—</span></div>
             <div class="shi-row"><span>Failure To Deliver (FTDs):</span><span class="shi-failure-to-deliver">—</span></div>
@@ -128,6 +160,10 @@ function ensureTooltip() {
   // Hide on mouseout
   el.addEventListener('mouseleave', hideTooltip);
   el.addEventListener('mouseenter', cancelHideTimer);
+  const refreshBtn = el.querySelector('.refresh-button');
+  if (refreshBtn) {
+    refreshBtn.addEventListener('click', handleRefreshClick);
+  }
   tooltipEl = el;
   return el;
 }
@@ -508,6 +544,67 @@ function buildMiniTableCard(title, rows, maxRows, preferredColumns) {
   return card;
 }
 
+function updateSqueezeScoreDisplay(root, data, symbol) {
+  const target = root?.querySelector('.shi-squeeze-score');
+  if (!target) return;
+
+  if (!data || !symbol) {
+    target.textContent = 'N/A';
+    return;
+  }
+
+  loadSqueezeScoreModule().then(module => {
+    if (symbol !== lastSymbol) return;
+    if (!module || typeof module.scoreConsensus !== 'function') {
+      target.textContent = 'N/A';
+      return;
+    }
+
+    const floatShares = parseSharesValue(data.float);
+    const siPctDirect = parsePercentNumber(data.shortInterestPercentFloat);
+    const costToBorrowPct = parsePercentNumber(data.costToBorrow);
+    const ftdValue = parseSharesValue(data.failureToDeliver);
+    const regShoShares = parseSharesValue(data.regShoMinFtds);
+    const regshoFlag = Number.isFinite(regShoShares) && regShoShares > 0;
+
+    let siPct = siPctDirect;
+    if (!Number.isFinite(siPct)) {
+      const computed = computeShortFloatPercent(data.shortInterest, data.float);
+      siPct = parsePercentNumber(computed);
+    }
+
+    if (!Number.isFinite(floatShares) || floatShares <= 0 || !Number.isFinite(siPct)) {
+      target.textContent = 'N/A';
+      return;
+    }
+
+    const payload = {
+      float_shares: floatShares,
+      si_pct: Number.isFinite(siPct) ? siPct : 0,
+      ctb: Number.isFinite(costToBorrowPct) ? costToBorrowPct : 0,
+      ftd_val: Number.isFinite(ftdValue) ? ftdValue : 0,
+      regsho: !!regshoFlag,
+    };
+
+    try {
+      const score = module.scoreConsensus(payload);
+      if (symbol !== lastSymbol) return;
+      if (Number.isFinite(score)) {
+        const fixed = score.toFixed(1);
+        target.textContent = fixed.endsWith('.0') ? fixed.slice(0, -2) : stripTrailingZeros(fixed);
+      } else {
+        target.textContent = 'N/A';
+      }
+    } catch (err) {
+      console.error(`❌ Failed to compute squeeze score for ${symbol}:`, err);
+      target.textContent = 'N/A';
+    }
+  }).catch(err => {
+    console.error('❌ Error loading squeeze score module:', err);
+    target.textContent = 'N/A';
+  });
+}
+
 function deriveTableColumns(rows, preferredColumns) {
   if (!rows || !rows.length) return [];
   let columns = [];
@@ -571,6 +668,7 @@ function showLoading(symbol, referenceRect) {
   safeSetText('.shi-short-interest-ratio', '—');
   safeSetText('.shi-short-interest-percent-float', '—');
   safeSetText('.shi-cost-to-borrow', '—');
+  safeSetText('.shi-squeeze-score', '—');
   safeSetText('.shi-short-shares-available', '—');
   safeSetText('.shi-finra-exempt-volume', '—');
 
@@ -661,10 +759,13 @@ function showData(symbol, referenceRect, data) {
     data?.float
   ));
   safeSetText('.shi-cost-to-borrow', formatPercentValue(data?.costToBorrow));
+  safeSetText('.shi-squeeze-score', 'Calculating…');
   safeSetText('.shi-short-shares-available', formatSharesDisplay(data?.shortSharesAvailable));
   safeSetText('.shi-finra-exempt-volume', formatSharesDisplay(data?.finraExemptVolume));
   safeSetText('.shi-failure-to-deliver', formatSharesDisplay(data?.failureToDeliver));
   safeSetText('.shi-regsho-min-ftds', formatRegShoShares(data?.regShoMinFtds));
+
+  updateSqueezeScoreDisplay(el, data, symbol);
   
   // Company information
   console.log(`🏢 Setting company info in popup:`);
@@ -718,20 +819,76 @@ function showData(symbol, referenceRect, data) {
 }
 
 function hideTooltip(arg) {
+  hoverIntentSymbol = null;
   const delay = typeof arg === 'number' ? arg : 1000;
   cancelHideTimer();
   if (delay <= 0) {
     if (tooltipEl) tooltipEl.style.display = 'none';
     lastSymbol = null;
     lastReferenceRect = null;
+    hoverIntentSymbol = null;
     return;
   }
   hideTimeout = setTimeout(() => {
     if (tooltipEl) tooltipEl.style.display = 'none';
     lastSymbol = null;
     lastReferenceRect = null;
+    hoverIntentSymbol = null;
     hideTimeout = null;
   }, delay);
+}
+
+function handleRefreshClick(event) {
+  event.preventDefault();
+  event.stopPropagation();
+  refreshCurrentSymbol();
+}
+
+function refreshCurrentSymbol() {
+  const symbol = lastSymbol;
+  if (!symbol) return;
+
+  hoverIntentSymbol = symbol;
+  const referenceRect = lastReferenceRect;
+  showLoading(symbol, referenceRect);
+
+  if (!chrome || !chrome.runtime) {
+    console.error('❌ Refresh failed: Chrome runtime not available');
+    if (hoverIntentSymbol === symbol && lastSymbol === symbol) {
+      showData(symbol, referenceRect, {
+        float: 'Extension Error',
+        shortInterest: 'Not Available',
+        costToBorrow: 'Not Available',
+        failureToDeliver: 'Not Available'
+      });
+    }
+    return;
+  }
+
+  console.log(`🔄 Refreshing data for ${symbol}`);
+  chrome.runtime.sendMessage({ type: 'fetch-pack', symbol }, (data) => {
+    if (chrome.runtime.lastError) {
+      console.error(`❌ Refresh runtime error for ${symbol}:`, chrome.runtime.lastError);
+      if (hoverIntentSymbol === symbol && lastSymbol === symbol) {
+        showData(symbol, referenceRect, {
+          float: 'Error',
+          shortInterest: 'Error',
+          costToBorrow: 'Error',
+          failureToDeliver: 'Error'
+        });
+      }
+      return;
+    }
+
+    if (hoverIntentSymbol === symbol && lastSymbol === symbol) {
+      showData(symbol, referenceRect, data || {
+        float: 'N/A',
+        shortInterest: 'N/A',
+        costToBorrow: 'N/A',
+        failureToDeliver: 'N/A'
+      });
+    }
+  });
 }
 
 async function fetchPack(symbol) {
@@ -1047,6 +1204,7 @@ document.addEventListener('mousemove', (event) => {
 
     // Skip editable fields and code editors
     if (target && target.closest && target.closest('input, textarea, [contenteditable], .monaco-editor, .CodeMirror, [role="textbox"]')) {
+      hoverIntentSymbol = null;
       hideTooltip();
       return;
     }
@@ -1064,6 +1222,7 @@ document.addEventListener('mousemove', (event) => {
       }
     }
     if (!range || !range.startContainer || range.startContainer.nodeType !== Node.TEXT_NODE) {
+      hoverIntentSymbol = null;
       hideTooltip();
       return;
     }
@@ -1082,12 +1241,14 @@ document.addEventListener('mousemove', (event) => {
 
     const match = word.match(/^\$([A-Za-z]{1,5})\b/);
     if (!match) {
+      hoverIntentSymbol = null;
       hideTooltip();
       return;
     }
 
     const symbol = match[1].toUpperCase();
     console.log(symbol);
+    hoverIntentSymbol = symbol;
 
     const matchedText = match[0];
     const relativeIndex = rawWord.indexOf(matchedText);
@@ -1109,6 +1270,7 @@ document.addEventListener('mousemove', (event) => {
       referenceRect = lastReferenceRect;
     }
     if (!referenceRect) {
+      hoverIntentSymbol = null;
       hideTooltip();
       return;
     }
@@ -1118,6 +1280,7 @@ document.addEventListener('mousemove', (event) => {
       if (!isPointLikeRect(referenceRect)) {
         lastReferenceRect = referenceRect;
       }
+      hoverIntentSymbol = symbol;
       cancelHideTimer();
       positionTooltip(lastReferenceRect || referenceRect);
       return;
@@ -1129,18 +1292,21 @@ document.addEventListener('mousemove', (event) => {
 
     lastSymbol = symbol;
     lastReferenceRect = referenceRect;
+    hoverIntentSymbol = symbol;
     showLoading(symbol, referenceRect);
     console.log(`📡 Content script: Requesting data for ${symbol}`);
     
     // Check if chrome.runtime is available
     if (!chrome || !chrome.runtime) {
       console.error('❌ Chrome runtime not available');
-      showData(symbol, lastReferenceRect, { 
-        float: 'Extension Error',
-        shortInterest: 'Not Available',
-        costToBorrow: 'Not Available', 
-        failureToDeliver: 'Not Available'
-      });
+      if (hoverIntentSymbol === symbol) {
+        showData(symbol, lastReferenceRect, { 
+          float: 'Extension Error',
+          shortInterest: 'Not Available',
+          costToBorrow: 'Not Available', 
+          failureToDeliver: 'Not Available'
+        });
+      }
       return;
     }
 
@@ -1148,18 +1314,20 @@ document.addEventListener('mousemove', (event) => {
       console.log(data);
       if (chrome.runtime.lastError) {
         console.error(`❌ Content script: Runtime error for ${symbol}:`, chrome.runtime.lastError);
-        showData(symbol, lastReferenceRect, { 
-          float: 'Error', 
-          shortInterest: 'Error', 
-          ctb: 'Error', 
-          ftd: 'Error' 
-        });
+        if (hoverIntentSymbol === symbol && lastSymbol === symbol) {
+          showData(symbol, lastReferenceRect, { 
+            float: 'Error', 
+            shortInterest: 'Error', 
+            ctb: 'Error', 
+            ftd: 'Error' 
+          });
+        }
         return;
       }
       
       console.log(`📊 Content script: Received data for ${symbol}:`, data);
       // Only update if still hovering same symbol
-      if (lastSymbol === symbol) {
+      if (hoverIntentSymbol === symbol && lastSymbol === symbol) {
         showData(symbol, lastReferenceRect, data || {
           float: 'N/A',
           shortInterest: 'N/A', 
