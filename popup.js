@@ -22,7 +22,11 @@
   const statusEl = $('#status');
   const urlEl = $('#url');
   const tickerEl = $('#ticker');
-  const contentEl = $('#content');
+  const hoverContentEl = $('#hoverContent');
+  const storedContentEl = $('#storedContent');
+  const storedPanelEl = $('#storedPanel');
+  const symbolInput = $('#symbolInput');
+  const loadSymbolBtn = $('#loadSymbol');
   const refreshBtn = $('#refresh');
   const cleanupBtn = $('#cleanup');
   const copyBtn = $('#copy');
@@ -32,7 +36,10 @@
   let debugEnabled = false;
   function dbg(...args) { if (debugEnabled) console.log(...args); }
 
-  refreshBtn.addEventListener('click', load);
+  refreshBtn.addEventListener('click', () => {
+    const symbol = normalizeSymbol(symbolInput?.value) || currentSymbol || deriveTickerFallback;
+    loadForSymbol(symbol, { manual: false });
+  });
   cleanupBtn.addEventListener('click', cleanupStorage);
   copyBtn.addEventListener('click', copyJSON);
   if (debugToggle) {
@@ -43,6 +50,24 @@
       });
     });
   }
+  if (loadSymbolBtn) {
+    loadSymbolBtn.addEventListener('click', () => {
+      const symbol = normalizeSymbol(symbolInput?.value);
+      loadForSymbol(symbol, { manual: true });
+    });
+  }
+  if (symbolInput) {
+    symbolInput.addEventListener('keydown', (evt) => {
+      if (evt.key === 'Enter') {
+        evt.preventDefault();
+        const symbol = normalizeSymbol(symbolInput.value);
+        loadForSymbol(symbol, { manual: true });
+      }
+    });
+  }
+
+  let currentSymbol = null;
+  let deriveTickerFallback = null;
 
   async function getActiveTab() {
     return new Promise((resolve) => {
@@ -75,26 +100,27 @@
 
   function renderData(ticker, data) {
     tickerEl.textContent = ticker || '—';
-    contentEl.innerHTML = '';
+    storedContentEl.innerHTML = '';
+    if (storedPanelEl) storedPanelEl.open = !!data;
     if (!ticker) {
       setStatus('No ticker recognized from this URL', true);
       renderAllTickersHint();
+      storedContentEl.dataset.json = '';
       return;
     }
     if (!data) {
       setStatus(`No stored data for ${ticker}`, true);
       renderAllTickersHint();
+      storedContentEl.dataset.json = '';
       return;
     }
-
-    setStatus('Loaded');
 
     // Summary
     const updated = data.lastUpdated ? new Date(data.lastUpdated).toLocaleString() : 'N/A';
     const summary = document.createElement('div');
     summary.className = 'small muted';
     summary.textContent = `Last Updated: ${updated}`;
-    contentEl.appendChild(summary);
+    storedContentEl.appendChild(summary);
 
     // Top-level fields (selected known keys)
     const fields = [
@@ -126,9 +152,8 @@
         const pctString = formatPercentDisplay((siShares / floatShares));
         shallow.shortInterestPercentFloat = pctString;
         if (data && typeof data === 'object') data.shortInterestPercentFloat = pctString;
-      }
-    } catch {}
-471005.11
+    }
+  } catch {}
     // Compute RegSHO Min FTDs = sharesOutstanding * 0.005 (display with commas)
     try {
       const soAbs = parseSharesToNumber(shallow.sharesOutstanding);
@@ -179,6 +204,16 @@
       else if (k === 'currentCash') {
         vEl.textContent = `$${val}`;
       }
+      else if (k === 'shortSharesAvailable') {
+        const abs = parseSharesToNumber(val);
+        vEl.textContent = abs != null ? `${Math.round(abs).toLocaleString()} shares` : String(val);
+      }
+      else if (k === 'costToBorrow') {
+        vEl.textContent = formatPercentDisplay(val);
+      }
+      else if (k === 'failureToDeliver') {
+        vEl.textContent = formatCashToMBDisplay(val);
+      }
       else if (k === 'optionsTradingEnabled') {
         vEl.textContent = formatOptionsTradingStatus(val);
       }
@@ -200,8 +235,8 @@
       const title = document.createElement('div');
       title.className = 'section-title';
       title.textContent = 'Summary Fields';
-      contentEl.appendChild(title);
-      contentEl.appendChild(grid);
+      storedContentEl.appendChild(title);
+      storedContentEl.appendChild(grid);
     }
 
     // Page Crawls per host
@@ -303,11 +338,11 @@
         section.appendChild(block);
       }
 
-      contentEl.appendChild(section);
+      storedContentEl.appendChild(section);
     });
 
     // Save last rendered for copy
-    contentEl.dataset.json = JSON.stringify(data, null, 2);
+    storedContentEl.dataset.json = JSON.stringify(data, null, 2);
   }
 
   function makeKV(label, obj) {
@@ -460,15 +495,18 @@
   }
 
   function formatCashToMBDisplay(value) {
-    if (value == null) return '';
+    if (value == null) return 'N/A';
     const cleaned = typeof value === 'string' ? value.replace(/\$/g, '') : value;
     const num = (typeof cleaned === 'number' && isFinite(cleaned)) ? cleaned : parseAbbrevNumber(String(cleaned));
     if (!Number.isFinite(num)) return String(value);
     const sign = num < 0 ? '-' : '';
     const abs = Math.abs(num);
-    const unit = abs >= 1e9
-      ? trimZeros((abs / 1e9).toFixed(2)) + 'B'
-      : trimZeros((abs / 1e6).toFixed(2)) + 'M';
+    let unit;
+    if (abs >= 1e12) unit = `${trimZeros((abs / 1e12).toFixed(2))}T`;
+    else if (abs >= 1e9) unit = `${trimZeros((abs / 1e9).toFixed(2))}B`;
+    else if (abs >= 1e6) unit = `${trimZeros((abs / 1e6).toFixed(2))}M`;
+    else if (abs >= 1e3) unit = `${trimZeros((abs / 1e3).toFixed(2))}K`;
+    else return `${sign}$${Math.round(abs).toLocaleString()}`;
     return `${sign}$${unit}`;
   }
 
@@ -753,8 +791,18 @@
 
   async function copyJSON() {
     try {
-      const text = contentEl.dataset.json || '';
-      await navigator.clipboard.writeText(text);
+      const storedJson = storedContentEl.dataset.json;
+      const hoverJson = hoverContentEl.dataset.pack;
+      let storedData = null;
+      let hoverPack = null;
+      try { if (hoverJson) hoverPack = JSON.parse(hoverJson); } catch {}
+      try { if (storedJson) storedData = JSON.parse(storedJson); } catch {}
+      const payload = {
+        symbol: currentSymbol || null,
+        hoverPack,
+        storedData
+      };
+      await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
       setStatus('Copied JSON to clipboard');
     } catch (e) {
       setStatus('Copy failed', true);
@@ -766,7 +814,7 @@
     hint.className = 'small muted';
     hint.style.marginTop = '8px';
     hint.textContent = 'Tip: No ticker detected. You can still view saved tickers in DevTools via chrome.storage.local.';
-    contentEl.appendChild(hint);
+    storedContentEl.appendChild(hint);
   }
 
   function setStatus(msg, isErr) {
@@ -774,37 +822,473 @@
     statusEl.className = 'small' + (isErr ? ' err' : '');
   }
 
-  async function load() {
+  function normalizeSymbol(input) {
+    if (!input) return null;
+    const trimmed = String(input).trim().replace(/^\$/,'').toUpperCase();
+    const cleaned = trimmed.replace(/[^A-Z0-9]/g, '');
+    if (!cleaned) return null;
+    return cleaned.slice(0, 6);
+  }
+
+  let hoverRequestId = 0;
+
+  async function loadForSymbol(symbol, opts = {}) {
+    const normalized = normalizeSymbol(symbol);
+    currentSymbol = normalized || null;
+    if (symbolInput && normalized) symbolInput.value = normalized;
+    if (tickerEl) tickerEl.textContent = normalized || '—';
+
+    if (!normalized) {
+      hoverContentEl.innerHTML = '<div class="small muted">Enter a symbol above to load data.</div>';
+      if (hoverContentEl.dataset) hoverContentEl.dataset.pack = '';
+      storedContentEl.innerHTML = '';
+      if (storedContentEl.dataset) storedContentEl.dataset.json = '';
+      if (storedPanelEl) storedPanelEl.open = false;
+      if (opts.manual) {
+        setStatus('Enter a ticker symbol', true);
+      }
+      return;
+    }
+
+    setStatus(`Loading ${normalized}…`);
+
+    const [hoverPack, storedData] = await Promise.all([
+      loadHoverData(normalized),
+      loadStoredData(normalized)
+    ]);
+
+    if (!hoverPack && !storedData) {
+      setStatus(`Loaded ${normalized} • no data available`, true);
+    } else if (!storedData) {
+      setStatus(`Loaded ${normalized} • no stored cache`, false);
+    } else {
+      setStatus(`Loaded ${normalized}`);
+    }
+  }
+
+  function loadHoverData(symbol) {
+    if (!hoverContentEl) return Promise.resolve();
+    const requestId = ++hoverRequestId;
+    hoverContentEl.innerHTML = `<div class="small muted">Fetching data for ${symbol}…</div>`;
+    if (hoverContentEl.dataset) hoverContentEl.dataset.pack = '';
+
+    return new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage({ type: 'fetch-pack', symbol }, (resp) => {
+          if (hoverRequestId !== requestId) return resolve();
+          if (chrome.runtime.lastError) {
+            hoverContentEl.innerHTML = `<div class="err small">${chrome.runtime.lastError.message || 'Request failed'}</div>`;
+            hoverContentEl.dataset.pack = '';
+            return resolve(null);
+          }
+          renderHoverPack(symbol, resp);
+          resolve(resp);
+        });
+      } catch (err) {
+        hoverContentEl.innerHTML = `<div class="err small">${err.message || 'Request failed'}</div>`;
+        hoverContentEl.dataset.pack = '';
+        resolve(null);
+      }
+    });
+  }
+
+  async function loadStoredData(symbol) {
+    const data = await getStoredForTicker(symbol);
+    renderData(symbol, data);
+    return data;
+  }
+
+  let squeezeScoreModulePromise = null;
+
+  function loadSqueezeScoreModule() {
+    if (!squeezeScoreModulePromise) {
+      const url = (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.getURL)
+        ? chrome.runtime.getURL('squeezeScore.js')
+        : './squeezeScore.js';
+      squeezeScoreModulePromise = import(url).catch(err => {
+        console.error('❌ Failed to load squeezeScore module:', err);
+        return null;
+      });
+    }
+    return squeezeScoreModulePromise;
+  }
+
+  function stripTrailingZeros(text) {
+    return String(text).replace(/\.00$/, '').replace(/(\.[1-9])0$/, '$1');
+  }
+
+  function parseSharesValue(value) {
+    if (value === null || value === undefined) return NaN;
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    const cleaned = String(value)
+      .replace(/shares?/ig, '')
+      .replace(/,/g, '')
+      .trim();
+    if (!cleaned) return NaN;
+    const match = cleaned.match(/^([+-]?\d+(?:\.\d+)?)([KMB])?$/i);
+    if (match) {
+      const raw = parseFloat(match[1]);
+      if (!Number.isFinite(raw)) return NaN;
+      const unit = match[2] ? match[2].toUpperCase() : '';
+      const mult = unit === 'B' ? 1e9 : unit === 'M' ? 1e6 : unit === 'K' ? 1e3 : 1;
+      return raw * mult;
+    }
+    const numeric = Number(cleaned);
+    return Number.isFinite(numeric) ? numeric : NaN;
+  }
+
+  function formatSharesDisplay(value) {
+    const num = parseSharesValue(value);
+    if (!Number.isFinite(num)) return 'N/A';
+    const abs = Math.abs(num);
+    if (abs >= 1e12) return `${stripTrailingZeros((abs / 1e12).toFixed(2))}T shares`;
+    if (abs >= 1e9) return `${stripTrailingZeros((abs / 1e9).toFixed(2))}B shares`;
+    if (abs >= 1e6) return `${stripTrailingZeros((abs / 1e6).toFixed(2))}M shares`;
+    if (abs >= 1e3) return `${stripTrailingZeros((abs / 1e3).toFixed(2))}K shares`;
+    return `${Math.round(abs).toLocaleString()} shares`;
+  }
+
+  function formatCurrencyDisplay(value) {
+    if (value === null || value === undefined) return 'N/A';
+    const num = Number(value);
+    if (!Number.isFinite(num)) return 'N/A';
+    const abs = Math.abs(num);
+    const sign = num < 0 ? '-' : '';
+    if (abs >= 1e12) return `${sign}$${stripTrailingZeros((abs / 1e12).toFixed(2))}T`;
+    if (abs >= 1e9) return `${sign}$${stripTrailingZeros((abs / 1e9).toFixed(2))}B`;
+    if (abs >= 1e6) return `${sign}$${stripTrailingZeros((abs / 1e6).toFixed(2))}M`;
+    if (abs >= 1e3) return `${sign}$${stripTrailingZeros((abs / 1e3).toFixed(2))}K`;
+    return `${sign}$${stripTrailingZeros(abs.toFixed(2))}`;
+  }
+
+  function formatPercentValue(value) {
+    const num = Number(value);
+    if (!Number.isFinite(num)) return 'N/A';
+    return `${stripTrailingZeros(num.toFixed(2))}%`;
+  }
+
+  function formatDaysValue(value) {
+    const num = Number(value);
+    if (!Number.isFinite(num)) return 'N/A';
+    return `${stripTrailingZeros(num.toFixed(2))} days`;
+  }
+
+  function formatOptionsTrading(value) {
+    if (value === true) return 'Yes';
+    if (value === false) return 'No';
+    return 'Unknown';
+  }
+
+  function formatShortInterestDisplay(value) {
+    const num = parseSharesValue(value);
+    if (Number.isFinite(num)) {
+      return `${Math.round(num).toLocaleString()} shares`;
+    }
+    if (typeof value === 'string' && value.trim()) {
+      const cleaned = value.replace(/shares?/ig, '').trim();
+      if (cleaned && !/^n\/?a$/i.test(cleaned)) return `${cleaned} shares`;
+    }
+    return 'N/A';
+  }
+
+  function formatRegShoShares(value) {
+    const num = parseSharesValue(value);
+    if (Number.isFinite(num)) {
+      return `${Math.round(num).toLocaleString()} shares`;
+    }
+    return 'N/A';
+  }
+
+  function computeShortFloatPercent(shortInterest, float) {
+    const si = parseSharesValue(shortInterest);
+    const fl = parseSharesValue(float);
+    if (!Number.isFinite(si) || !Number.isFinite(fl) || fl <= 0) return null;
+    const pct = (si / fl) * 100;
+    return `${stripTrailingZeros(pct.toFixed(2))}%`;
+  }
+
+  function formatShortFloatPercentDisplay(value, shortInterest, float) {
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (trimmed.endsWith('%')) return trimmed;
+    }
+    const computed = computeShortFloatPercent(shortInterest, float);
+    if (computed) return computed;
+    const num = Number(value);
+    if (Number.isFinite(num)) {
+      const pct = num <= 1 ? num * 100 : num;
+      return `${stripTrailingZeros(pct.toFixed(2))}%`;
+    }
+    return 'N/A';
+  }
+
+  function parsePercentNumber(value) {
+    if (value === null || value === undefined) return NaN;
+    if (typeof value === 'number') {
+      return Number.isFinite(value) ? value : NaN;
+    }
+    const text = String(value).trim();
+    if (!text) return NaN;
+    const match = text.replace(/,/g, '').match(/([+-]?\d+(?:\.\d+)?)/);
+    if (!match) return NaN;
+    const num = parseFloat(match[1]);
+    if (!Number.isFinite(num)) return NaN;
+    if (text.includes('%')) return num;
+    return num > 1 ? num : num * 100;
+  }
+
+  function renderHoverPack(symbol, pack) {
+    if (!hoverContentEl) return;
+    hoverContentEl.innerHTML = '';
+
+    if (!pack || typeof pack !== 'object') {
+      hoverContentEl.innerHTML = '<div class="err small">No hover data available.</div>';
+      hoverContentEl.dataset.pack = '';
+      return;
+    }
+
+    hoverContentEl.dataset.pack = JSON.stringify(pack, null, 2);
+
+    const header = document.createElement('div');
+    header.className = 'row';
+    header.style.alignItems = 'baseline';
+    const symEl = document.createElement('div'); symEl.className = 'key'; symEl.style.fontSize = '18px'; symEl.textContent = `$${symbol}`;
+    const updatedEl = document.createElement('div'); updatedEl.className = 'small muted';
+    if (pack.fetchedAt) {
+      const fetchedDate = new Date(pack.fetchedAt);
+      if (!isNaN(fetchedDate.valueOf())) {
+        updatedEl.textContent = `Updated: ${fetchedDate.toLocaleString()}`;
+      } else if (typeof pack.fetchedAt === 'string') {
+        updatedEl.textContent = pack.fetchedAt;
+      }
+    }
+    header.appendChild(symEl);
+    header.appendChild(updatedEl);
+    hoverContentEl.appendChild(header);
+
+    const linksRow = document.createElement('div');
+    linksRow.className = 'link-row';
+    linksRow.appendChild(createSourceLink('DilutionTracker', `https://dilutiontracker.com/app/search/${encodeURIComponent(symbol)}`));
+    linksRow.appendChild(createSourceLink('Fintel', `https://fintel.io/ss/us/${encodeURIComponent(symbol)}`));
+    hoverContentEl.appendChild(linksRow);
+
+    if (pack.regularMarketChange?.text || pack.extendedMarketChange?.text) {
+      const priceRow = document.createElement('div');
+      priceRow.className = 'small muted';
+      const parts = [];
+      if (pack.regularMarketChange?.text) parts.push(`Regular: ${pack.regularMarketChange.text}`);
+      if (pack.extendedMarketChange?.text) parts.push(`Extended: ${pack.extendedMarketChange.text}`);
+      priceRow.textContent = parts.join(' · ');
+      hoverContentEl.appendChild(priceRow);
+    }
+
+    const coreRows = [
+      { label: 'Free Float', value: pack.float, formatter: formatSharesDisplay },
+      { label: 'Shares Outstanding', value: pack.sharesOutstanding, formatter: formatSharesDisplay },
+      { label: 'Market Cap', value: pack.marketCap, formatter: formatCurrencyDisplay },
+      { label: 'Estimated Cash', value: pack.estimatedCash, formatter: formatCurrencyDisplay },
+      { label: 'Institutional Ownership', value: formatPercentDisplay(pack.institutionalOwnership) },
+      { label: 'Enterprise Value', value: pack.enterpriseValue, formatter: formatCurrencyDisplay }
+    ];
+
+    hoverContentEl.appendChild(createInfoCard('Core Financials', coreRows));
+
+    const squeezeScoreEl = document.createElement('span');
+    squeezeScoreEl.textContent = 'Calculating…';
+
+    const shortRows = [
+      { label: 'Short Interest', value: pack.shortInterest, formatter: formatShortInterestDisplay },
+      { label: 'Short Interest Ratio', value: pack.shortInterestRatio, formatter: formatDaysValue },
+      { label: 'Short Float %', value: formatShortFloatPercentDisplay(pack.shortInterestPercentFloat, pack.shortInterest, pack.float) },
+      { label: 'Cost To Borrow', value: formatPercentDisplay(pack.costToBorrow) },
+      { label: 'Squeeze Score', valueEl: squeezeScoreEl },
+      { label: 'Short Shares Available', value: pack.shortSharesAvailable, formatter: formatSharesDisplay },
+      { label: 'Short-Exempt Volume', value: pack.finraExemptVolume, formatter: formatSharesDisplay },
+      { label: 'Failure To Deliver (FTDs)', value: pack.failureToDeliver, formatter: formatCurrencyDisplay },
+      { label: 'Reg SHO Min FTDs', value: pack.regShoMinFtds, formatter: formatRegShoShares }
+    ];
+
+    hoverContentEl.appendChild(createInfoCard('Short Interest & Liquidity', shortRows));
+
+    updatePopupSqueezeScore(squeezeScoreEl, pack, symbol);
+
+    const companyRows = [
+      { label: 'Country', value: pack.country || 'N/A' },
+      { label: 'Sector', value: pack.sector || 'N/A' },
+      { label: 'Industry', value: pack.industry || 'N/A' },
+      { label: 'Exchange', value: pack.exchange || 'N/A' },
+      { label: 'Options Trading', value: formatOptionsTrading(pack.optionsTradingEnabled) },
+      { label: 'Last Data Update', value: pack.lastDataUpdate || 'N/A' }
+    ];
+
+    hoverContentEl.appendChild(createInfoCard('Company Profile', companyRows));
+
+    const tablesWrap = document.createElement('div');
+    renderHoverTables(tablesWrap, pack);
+    if (tablesWrap.children.length) {
+      const title = document.createElement('div');
+      title.className = 'section-title';
+      title.textContent = 'Recent Borrow Data';
+      hoverContentEl.appendChild(title);
+      while (tablesWrap.firstChild) {
+        hoverContentEl.appendChild(tablesWrap.firstChild);
+      }
+    }
+  }
+
+  function createInfoCard(title, rows) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    if (title) {
+      const heading = document.createElement('div');
+      heading.className = 'section-title';
+      heading.textContent = title;
+      card.appendChild(heading);
+    }
+    const grid = document.createElement('div');
+    grid.className = 'grid2';
+    rows.forEach(row => {
+      if (!row) return;
+      const labelEl = document.createElement('div');
+      labelEl.className = 'k';
+      labelEl.textContent = row.label;
+      const valueEl = document.createElement('div');
+      valueEl.className = 'v';
+      if (row.valueEl) {
+        valueEl.appendChild(row.valueEl);
+      } else {
+        const val = row.formatter ? row.formatter(row.value) : row.value;
+        valueEl.textContent = val == null || val === '' ? 'N/A' : String(val);
+      }
+      grid.appendChild(labelEl);
+      grid.appendChild(valueEl);
+    });
+    card.appendChild(grid);
+    return card;
+  }
+
+  function updatePopupSqueezeScore(targetEl, pack, symbol) {
+    if (!targetEl) return;
+    loadSqueezeScoreModule().then(module => {
+      if (symbol !== currentSymbol) return;
+      if (!module || typeof module.scoreConsensus !== 'function') {
+        targetEl.textContent = 'N/A';
+        return;
+      }
+      const floatShares = parseSharesValue(pack.float);
+      const siPct = parsePercentNumber(pack.shortInterestPercentFloat);
+      const costToBorrowPct = parsePercentNumber(pack.costToBorrow);
+      const ftdValue = typeof pack.failureToDeliver === 'number'
+        ? pack.failureToDeliver
+        : parseFloat(String(pack.failureToDeliver || '').replace(/[$,]/g, ''));
+      const regShoShares = parseSharesValue(pack.regShoMinFtds);
+      const regshoFlag = Number.isFinite(regShoShares) && regShoShares > 0;
+
+      let siValue = siPct;
+      if (!Number.isFinite(siValue)) {
+        const computed = computeShortFloatPercent(pack.shortInterest, pack.float);
+        siValue = parsePercentNumber(computed);
+      }
+
+      if (!Number.isFinite(floatShares) || floatShares <= 0 || !Number.isFinite(siValue)) {
+        targetEl.textContent = 'N/A';
+        return;
+      }
+
+      try {
+        const score = module.scoreConsensus({
+          float_shares: floatShares,
+          si_pct: siValue,
+          ctb: Number.isFinite(costToBorrowPct) ? costToBorrowPct : 0,
+          ftd_val: Number.isFinite(ftdValue) ? ftdValue : 0,
+          regsho: regshoFlag
+        });
+        if (symbol !== currentSymbol) return;
+        targetEl.textContent = Number.isFinite(score)
+          ? (score.toFixed(1).endsWith('.0') ? score.toFixed(1).slice(0, -2) : stripTrailingZeros(score.toFixed(1)))
+          : 'N/A';
+      } catch (err) {
+        console.error(`❌ Failed to compute squeeze score for ${symbol}:`, err);
+        targetEl.textContent = 'N/A';
+      }
+    }).catch(err => {
+      console.error('❌ Error loading squeeze score module:', err);
+      targetEl.textContent = 'N/A';
+    });
+  }
+
+  function renderHoverTables(container, data) {
+    const configs = [
+      { key: 'shortBorrowRateTable', title: 'Cost To Borrow', maxRows: 5 },
+      { key: 'failsToDeliverTable', title: 'Failure To Deliver (FTDs)', maxRows: 5 },
+      { key: 'shortSharesAvailabilityTable', title: 'Short Shares Available', maxRows: 3 }
+    ];
+
+    configs.forEach(cfg => {
+      const rows = Array.isArray(data?.[cfg.key]) ? data[cfg.key] : null;
+      if (!rows || !rows.length) return;
+      const columns = deriveHoverTableColumns(rows);
+      if (!columns.length) return;
+      const card = document.createElement('div');
+      card.className = 'card';
+      const title = document.createElement('div'); title.className = 'table-title'; title.textContent = cfg.title;
+      card.appendChild(title);
+      const headers = columns.map(prettifyHoverColumnName);
+      const table = makeTable(headers, rows.map(row => columns.map(col => row[col] ?? '')), cfg.maxRows || rows.length);
+      card.appendChild(table);
+      container.appendChild(card);
+    });
+  }
+
+  function deriveHoverTableColumns(rows) {
+    if (!rows || !rows.length) return [];
+    const set = new Set();
+    rows.forEach(row => {
+      Object.keys(row || {}).forEach(key => {
+        const value = row[key];
+        if (value != null && String(value).trim() !== '') {
+          set.add(key);
+        }
+      });
+    });
+    const columns = Array.from(set);
+    if (columns.includes('date')) {
+      const filtered = columns.filter(col => col !== 'date');
+      return ['date', ...filtered.slice(0, 3)];
+    }
+    return columns.slice(0, 4);
+  }
+
+  function prettifyHoverColumnName(name) {
+    if (!name) return '';
+    if (/\s/.test(name)) return name;
+    return name.replace(/_/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2').replace(/\b\w/g, ch => ch.toUpperCase());
+  }
+
+  function createSourceLink(label, href) {
+    const link = document.createElement('a');
+    link.className = 'link-pill';
+    link.href = href;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.textContent = label;
+    return link;
+  }
+
+
+  async function loadInitial() {
     setStatus('Loading…');
     const tab = await getActiveTab();
     const href = tab?.url || '';
     urlEl.textContent = href || 'Unknown';
-    const ticker = deriveTickerFromUrl(href);
-    // Run a proactive cleanup once per popup open
-    await cleanupStorage({ silent: true });
-    const data = await getStoredForTicker(ticker);
-    renderData(ticker, data);
-
-    if (ticker) {
-      try {
-        chrome.runtime.sendMessage({ type: 'fetch-pack', symbol: ticker }, (resp) => {
-          if (chrome.runtime.lastError) return;
-          if (!resp || typeof resp !== 'object') return;
-          const merged = { ...(data || {}) };
-          let changed = false;
-          Object.entries(resp).forEach(([k, v]) => {
-            if (v === null || v === undefined) return;
-            if (merged[k] !== v) {
-              merged[k] = v;
-              changed = true;
-            }
-          });
-          if (changed) renderData(ticker, merged);
-        });
-      } catch (e) {
-        console.warn('fetch-pack refresh failed', e);
-      }
+    deriveTickerFallback = deriveTickerFromUrl(href);
+    const initialSymbol = normalizeSymbol(symbolInput?.value) || deriveTickerFallback;
+    if (symbolInput && deriveTickerFallback && !symbolInput.value) {
+      symbolInput.value = deriveTickerFallback;
     }
+    // Clean storage once per popup open
+    await cleanupStorage({ silent: true });
+    await loadForSymbol(initialSymbol, { manual: false });
   }
 
   // --- Cleanup: purge blacklisted value keys across all tickers ---
@@ -990,6 +1474,6 @@
   chrome.storage.local.get('debug_mode', (res) => {
     debugEnabled = !!res.debug_mode;
     if (debugToggle) debugToggle.checked = debugEnabled;
-    load();
+    loadInitial();
   });
 })();

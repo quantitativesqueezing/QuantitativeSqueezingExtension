@@ -16,8 +16,10 @@
       .badge { background: #374151; color: #e5e7eb; }
     }
     button { padding: 4px 8px; border-radius: 6px; border: 1px solid #d1d5db; background: #f9fafb; cursor: pointer; }
+    input[type="text"] { padding: 4px 6px; border-radius: 6px; border: 1px solid #d1d5db; background: #fff; color: inherit; }
     @media (prefers-color-scheme: dark) {
       button { border-color: #4b5563; background: #1f2937; color: #e5e7eb; }
+      input[type="text"] { border-color: #4b5563; background: #0f172a; color: #e5e7eb; }
     }
     details { margin: 6px 0; }
     pre { white-space: pre-wrap; word-break: break-word; }
@@ -54,7 +56,15 @@
 
     .card { border: 1px solid rgba(0,0,0,.08); border-radius: 8px; padding: 8px 10px; margin: 8px 0; }
     @media (prefers-color-scheme: dark) { .card { border-color: rgba(255,255,255,.1); } }
+    #hoverContent > .card:first-child { margin-top: 0; }
     .table-title { font-weight: 600; margin-top: 6px; margin-bottom: 4px; }
+    .link-row { display:flex; gap:8px; flex-wrap:wrap; margin:8px 0; }
+    .link-pill { display:inline-flex; align-items:center; gap:4px; padding:3px 8px; border-radius:6px; border:1px solid rgba(37,99,235,0.35); background: rgba(37,99,235,0.08); color:#1d4ed8; text-decoration:none; font-size:12px; font-weight:600; }
+    .link-pill:hover { background: rgba(37,99,235,0.16); border-color: rgba(37,99,235,0.55); }
+    @media (prefers-color-scheme: dark) {
+      .link-pill { border-color: rgba(147,197,253,0.4); background: rgba(37,99,235,0.15); color:#93c5fd; }
+      .link-pill:hover { background: rgba(37,99,235,0.25); border-color: rgba(147,197,253,0.6); }
+    }
   </style>
 </head>
 <body>
@@ -66,7 +76,7 @@
       </label>
       <div id="status" class="small" style="margin-left:8px;">Loading…</div>
       <div style="flex:1"></div>
-      <button id="refresh">Refresh</button>
+      <button id="refresh">Reload</button>
       <button id="cleanup">Clean</button>
       <button id="copy">JSON</button>
     </div>
@@ -74,11 +84,20 @@
       <div>URL:</div>
       <div id="url" class="mono" style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></div>
     </div>
-    <div class="row small">
-      <div>Ticker:</div>
-      <div id="ticker" class="badge mono">—</div>
+    <div class="row" style="gap:6px; margin-bottom:12px; align-items:center;">
+      <label class="small" for="symbolInput" style="font-weight:600;">Symbol</label>
+      <input id="symbolInput" class="mono" type="text" placeholder="e.g. OPAD" style="flex:0 0 110px; padding:4px 6px; border-radius:6px; border:1px solid rgba(0,0,0,0.15);" />
+      <button id="loadSymbol">Load Symbol</button>
+      <div style="flex:1"></div>
+      <div class="small">Detected: <span id="ticker" class="badge mono">—</span></div>
     </div>
-    <div id="content"></div>
+
+    <div id="hoverContent"></div>
+
+    <details id="storedPanel" style="margin-top:12px;">
+      <summary class="key">Stored Page Data</summary>
+      <div id="storedContent" style="margin-top:8px;"></div>
+    </details>
   </div>
   <script src="popup.js"></script>
 </body>

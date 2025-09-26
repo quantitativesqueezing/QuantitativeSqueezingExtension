@@ -279,6 +279,8 @@ async function fetchPack(symbol) {
   const costToBorrowRaw = valueOrNull(ctbVal);
   const ftdRaw = valueOrNull(ftdVal);
   const shortBorrowRateTable = Array.isArray(storedData?.shortBorrowRateTable) ? storedData.shortBorrowRateTable : null;
+  const failsToDeliverTable = Array.isArray(storedData?.failsToDeliverTable) ? storedData.failsToDeliverTable : null;
+  const shortSharesAvailabilityTable = Array.isArray(storedData?.shortSharesAvailabilityTable) ? storedData.shortSharesAvailabilityTable : null;
 
   const floatAbs = firstNonNull(
     parseShares(storedData?.latestFloat),
@@ -312,7 +314,7 @@ async function fetchPack(symbol) {
     storageMutated = true;
   }
 
-  const shortSharesAvailableAbs = firstNonNull(
+  let shortSharesAvailableAbs = firstNonNull(
     parseShares(storedData?.shortSharesAvailable),
     parseShares(pickFromCrawlsTop(storedData, 'shortSharesAvailable'))
   );
@@ -322,7 +324,7 @@ async function fetchPack(symbol) {
     parseShares(pickFromCrawlsTop(storedData, 'finraExemptVolume'))
   );
 
-  const failureToDeliverAbs = firstNonNull(
+  let failureToDeliverAbs = firstNonNull(
     parseShares(storedData?.failureToDeliver),
     parseShares(ftdRaw),
     parseShares(pickFromCrawlsTop(storedData, 'failureToDeliver'))
@@ -348,7 +350,37 @@ async function fetchPack(symbol) {
     parseNumber(pickFromCrawlsTop(storedData, 'estimatedNetCashPerShare'))
   );
 
-  const costToBorrowPercent = deriveCostToBorrowPercent(shortBorrowRateTable, costToBorrowRaw, storedData?.costToBorrow);
+  let costToBorrowPercent = deriveCostToBorrowPercent(shortBorrowRateTable, costToBorrowRaw, storedData?.costToBorrow);
+
+  const tableShortShares = extractShortSharesAvailability(shortSharesAvailabilityTable);
+  if (tableShortShares != null) {
+    shortSharesAvailableAbs = tableShortShares;
+    if (!workingData) workingData = storedData ? { ...storedData } : {};
+    if (workingData.shortSharesAvailable !== tableShortShares) {
+      workingData.shortSharesAvailable = tableShortShares;
+      storageMutated = true;
+    }
+  }
+
+  const tableCostToBorrow = extractCostToBorrowLatest(shortBorrowRateTable);
+  if (tableCostToBorrow != null) {
+    costToBorrowPercent = tableCostToBorrow;
+    if (!workingData) workingData = storedData ? { ...storedData } : {};
+    if (workingData.costToBorrow !== tableCostToBorrow) {
+      workingData.costToBorrow = tableCostToBorrow;
+      storageMutated = true;
+    }
+  }
+
+  const tableFailureToDeliver = extractFtdValue(failsToDeliverTable);
+  if (tableFailureToDeliver != null) {
+    failureToDeliverAbs = tableFailureToDeliver;
+    if (!workingData) workingData = storedData ? { ...storedData } : {};
+    if (workingData.failureToDeliver !== tableFailureToDeliver) {
+      workingData.failureToDeliver = tableFailureToDeliver;
+      storageMutated = true;
+    }
+  }
 
   const shortInterestRatioDays = firstNonNull(
     parseNumber(storedData?.shortInterestRatio),
@@ -425,6 +457,8 @@ async function fetchPack(symbol) {
     shortInterest: pack.shortInterest,
     shortInterestRatio: pack.shortInterestRatio,
     costToBorrow: pack.costToBorrow,
+    shortSharesAvailable: pack.shortSharesAvailable,
+    failureToDeliver: pack.failureToDeliver,
     finraExemptVolume: pack.finraExemptVolume
   });
   
@@ -558,6 +592,45 @@ function deriveCostToBorrowPercent(tableRows, rawValue, storedValue) {
   const fallback = parsePercent(rawValue);
   if (fallback != null) return fallback;
   return parsePercent(storedValue);
+}
+
+function extractShortSharesAvailability(tableRows) {
+  if (!Array.isArray(tableRows) || !tableRows.length) return null;
+  const row = tableRows[0] || {};
+  const candidates = ['shortSharesAvailability', 'shortSharesAvailable', 'sharesAvailable', 'availableShares', 'shares'];
+  for (const key of candidates) {
+    if (row[key] != null && String(row[key]).trim() !== '') {
+      const parsed = parseShares(row[key]);
+      if (Number.isFinite(parsed) && parsed >= 0) return parsed;
+    }
+  }
+  return null;
+}
+
+function extractCostToBorrowLatest(tableRows) {
+  if (!Array.isArray(tableRows) || !tableRows.length) return null;
+  const row = tableRows[0] || {};
+  const candidates = ['latest', 'Latest', 'borrowRate', 'Borrow Rate', 'fee', 'Fee', 'rate', 'Rate'];
+  for (const key of candidates) {
+    if (row[key] != null && String(row[key]).trim() !== '') {
+      const parsed = parsePercent(row[key]);
+      if (parsed != null) return parsed;
+    }
+  }
+  return null;
+}
+
+function extractFtdValue(tableRows) {
+  if (!Array.isArray(tableRows) || !tableRows.length) return null;
+  const row = tableRows[0] || {};
+  const candidates = ['value', 'Value', 'amount', 'Amount', 'usd', 'USD'];
+  for (const key of candidates) {
+    if (row[key] != null && String(row[key]).trim() !== '') {
+      const parsed = parseDollars(row[key]);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return null;
 }
 
 function formatPercentTwoDecimals(value) {

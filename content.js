@@ -762,7 +762,7 @@ function showData(symbol, referenceRect, data) {
   safeSetText('.shi-squeeze-score', 'Calculating…');
   safeSetText('.shi-short-shares-available', formatSharesDisplay(data?.shortSharesAvailable));
   safeSetText('.shi-finra-exempt-volume', formatSharesDisplay(data?.finraExemptVolume));
-  safeSetText('.shi-failure-to-deliver', formatSharesDisplay(data?.failureToDeliver));
+  safeSetText('.shi-failure-to-deliver', formatCurrencyDisplay(data?.failureToDeliver));
   safeSetText('.shi-regsho-min-ftds', formatRegShoShares(data?.regShoMinFtds));
 
   updateSqueezeScoreDisplay(el, data, symbol);
