@@ -16,7 +16,10 @@
     "https://dilutiontracker.com/*",
     "https://*.dilutiontracker.com/*",
     "https://api.dilutiontracker.com/*",
-    "https://*.interactivebrokers.com/*"
+    "https://*.interactivebrokers.com/*",
+    "https://www.nasdaqtrader.com/*",
+    "http://www.nasdaqtrader.com/*",
+    "https://www.nyse.com/*"
   ],
   "background": {
     "service_worker": "service_worker.js"
@@ -24,19 +27,19 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["content.js"],
+      "js": ["tooltip_template.js", "content.js"],
       "css": ["css/tooltip.css"],
       "run_at": "document_idle"
     },
     {
       "matches": ["https://dilutiontracker.com/*"],
-      "js": ["dilutiontracker_content.js"],
+      "js": ["tooltip_template.js", "dilutiontracker_content.js"],
       "css": ["css/tooltip.css"],
       "run_at": "document_idle"
     },
     {
       "matches": ["https://fintel.io/*"],
-      "js": ["fintel_content.js"],
+      "js": ["tooltip_template.js", "fintel_content.js"],
       "css": ["css/tooltip.css"],
       "run_at": "document_idle"
     }

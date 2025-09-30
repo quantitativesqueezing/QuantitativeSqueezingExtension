@@ -203,6 +203,177 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   return false;
 });
 
+const REG_SHO_MARKETS = ['NYSE', 'NYSE American', 'NYSE Arca', 'NYSE National', 'NYSE Chicago'];
+
+function easternNowDate() {
+  const now = new Date();
+  // Convert to America/New_York by formatting then re-parsing to avoid tz math issues
+  const localeString = now.toLocaleString('en-US', { timeZone: 'America/New_York' });
+  return new Date(localeString);
+}
+
+function isWeekendDay(date) {
+  const day = date.getDay();
+  return day === 0 || day === 6;
+}
+
+function previousBusinessDay(date) {
+  const d = new Date(date.getTime());
+  do {
+    d.setDate(d.getDate() - 1);
+  } while (isWeekendDay(d));
+  return d;
+}
+
+function determineRegShoStartDate() {
+  // Start from "today" in Eastern time and adjust for weekend / Monday guidance
+  const eastern = easternNowDate();
+  const start = new Date(eastern.getFullYear(), eastern.getMonth(), eastern.getDate());
+  const day = start.getDay();
+  if (day === 1) { // Monday → use prior Friday
+    start.setDate(start.getDate() - 3);
+  } else if (day === 0) { // Sunday → prior Friday
+    start.setDate(start.getDate() - 2);
+  } else if (day === 6) { // Saturday → prior Friday
+    start.setDate(start.getDate() - 1);
+  }
+  if (isWeekendDay(start)) {
+    return previousBusinessDay(start);
+  }
+  return start;
+}
+
+function formatDateYYYYMMDD(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}${month}${day}`;
+}
+
+function formatDateISO(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+async function fetchNasdaqRegShoForDate(symbol, date) {
+  const dateStamp = formatDateYYYYMMDD(date);
+  const url = `https://www.nasdaqtrader.com/dynamic/symdir/regsho/nasdaqth${dateStamp}.txt`;
+  try {
+    const resp = await fetch(url, { cache: 'no-cache' });
+    if (!resp.ok) {
+      return { success: false };
+    }
+    const text = await resp.text();
+    if (!text) {
+      return { success: true, onList: false, date: dateStamp };
+    }
+    const lines = text.split(/\r?\n/);
+    const matched = lines.some((line, idx) => {
+      if (idx === 0) return false; // skip header
+      if (!line || !line.includes('|')) return false;
+      const first = line.split('|')[0]?.trim().toUpperCase();
+      return first === symbol;
+    });
+    return { success: true, onList: matched, date: dateStamp };
+  } catch (err) {
+    console.warn(`⚠️ Nasdaq RegSHO fetch failed for ${symbol} ${dateStamp}:`, err);
+    return { success: false };
+  }
+}
+
+async function fetchNasdaqRegShoStatus(symbol, startDate) {
+  let attemptDate = new Date(startDate.getTime());
+  for (let i = 0; i < 5; i++) {
+    const result = await fetchNasdaqRegShoForDate(symbol, attemptDate);
+    if (result.success) {
+      return result;
+    }
+    attemptDate = previousBusinessDay(attemptDate);
+  }
+  return null;
+}
+
+async function fetchNyseRegShoForDate(symbol, date) {
+  const isoDate = formatDateISO(date);
+  let anySuccess = false;
+  let onList = false;
+  const marketDetails = [];
+
+  for (const market of REG_SHO_MARKETS) {
+    const url = `https://www.nyse.com/api/regulatory/threshold-securities/download?selectedDate=${isoDate}&market=${encodeURIComponent(market)}`;
+    try {
+      const resp = await fetch(url, { cache: 'no-cache' });
+      if (!resp.ok) {
+        continue;
+      }
+      const text = await resp.text();
+      if (!text || !text.includes('|')) {
+        continue;
+      }
+      anySuccess = true;
+      const lines = text.split(/\r?\n/);
+      const matched = lines.some((line) => {
+        if (!line || !line.includes('|')) return false;
+        const first = line.split('|')[0]?.trim().toUpperCase();
+        return first === symbol;
+      });
+      marketDetails.push({ market, onList: matched });
+      if (matched) onList = true;
+    } catch (err) {
+      console.warn(`⚠️ NYSE RegSHO fetch failed for ${symbol} ${isoDate} (${market}):`, err);
+    }
+  }
+
+  if (!anySuccess) {
+    return { success: false };
+  }
+
+  return { success: true, onList, date: isoDate, markets: marketDetails };
+}
+
+async function fetchNyseRegShoStatus(symbol, startDate) {
+  let attemptDate = new Date(startDate.getTime());
+  for (let i = 0; i < 5; i++) {
+    const result = await fetchNyseRegShoForDate(symbol, attemptDate);
+    if (result.success) {
+      return result;
+    }
+    attemptDate = previousBusinessDay(attemptDate);
+  }
+  return null;
+}
+
+async function fetchRegShoStatus(symbol) {
+  const targetDate = determineRegShoStartDate();
+  const [nasdaq, nyse] = await Promise.all([fetchNasdaqRegShoStatus(symbol, targetDate), fetchNyseRegShoStatus(symbol, targetDate)]);
+
+  if (!nasdaq && !nyse) {
+    return null;
+  }
+
+  const sources = {};
+  if (nasdaq) {
+    sources.nasdaq = {
+      onList: !!nasdaq.onList,
+      date: nasdaq.date || null
+    };
+  }
+  if (nyse) {
+    sources.nyse = {
+      onList: !!nyse.onList,
+      date: nyse.date || null,
+      markets: nyse.markets || []
+    };
+  }
+
+  return {
+    onList: Boolean((nasdaq && nasdaq.onList) || (nyse && nyse.onList)),
+    sources
+  };
+}
+
 async function fetchPack(symbol) {
   const now = Date.now();
   const key = symbol.toUpperCase();
@@ -214,12 +385,20 @@ async function fetchPack(symbol) {
   }*/
  console.log('fetchPack() SERVICE_WORKER');
 
-  const [floatVal, siVal, ctbVal, ftdVal] = await Promise.allSettled([
+  const [floatVal, siVal, ctbVal, ftdVal, regShoVal] = await Promise.allSettled([
     fetchFreeFloat(key),
     fetchShortInterest(key),
     fetchCTB(key),
-    fetchLatestFTD(key)
+    fetchLatestFTD(key),
+    fetchRegShoStatus(key)
   ]);
+
+  let regShoResult = null;
+  if (regShoVal.status === 'fulfilled') {
+    regShoResult = regShoVal.value;
+  } else if (regShoVal.status === 'rejected') {
+    console.warn(`⚠️ RegSHO status fetch failed for ${key}:`, regShoVal.reason);
+  }
 
   // Get estimated cash from stored data
   const storedResult = await chrome.storage.local.get(storageKey);
@@ -411,6 +590,18 @@ async function fetchPack(symbol) {
     storageMutated = true;
   }
 
+  if (regShoResult) {
+    if (!workingData) workingData = storedData ? { ...storedData } : {};
+    if (workingData.regShoThreshold !== regShoResult.onList) {
+      workingData.regShoThreshold = regShoResult.onList;
+      storageMutated = true;
+    }
+    if (JSON.stringify(workingData.regShoSources || null) !== JSON.stringify(regShoResult.sources || null)) {
+      workingData.regShoSources = regShoResult.sources || null;
+      storageMutated = true;
+    }
+  }
+
   if (storageMutated && workingData) {
     await chrome.storage.local.set({ [storageKey]: workingData });
     storedData = workingData;
@@ -448,6 +639,8 @@ async function fetchPack(symbol) {
     exchange: storedData?.exchange || pickFromCrawlsTop(storedData, 'exchange') || null,
     institutionalOwnership: institutionalOwnershipPercent ?? null,
     optionsTradingEnabled: optionsEnabled,
+    regShoThreshold: regShoResult ? regShoResult.onList : (storedData?.regShoThreshold ?? null),
+    regShoSources: regShoResult ? regShoResult.sources : (storedData?.regShoSources || null),
     regularMarketChange: storedData?.regularMarketChange || null,
     extendedMarketChange: storedData?.extendedMarketChange || null
   };

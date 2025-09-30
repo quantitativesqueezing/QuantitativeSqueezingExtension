@@ -27,21 +27,14 @@
   const storedPanelEl = $('#storedPanel');
   const symbolInput = $('#symbolInput');
   const loadSymbolBtn = $('#loadSymbol');
-  const refreshBtn = $('#refresh');
-  const cleanupBtn = $('#cleanup');
-  const copyBtn = $('#copy');
   const debugToggle = $('#debugToggle');
+
+  const LAST_SYMBOL_STORAGE_KEY = 'popup_last_symbol';
 
   // Debug mode flag (persisted in chrome.storage.local as 'debug_mode')
   let debugEnabled = false;
   function dbg(...args) { if (debugEnabled) console.log(...args); }
 
-  refreshBtn.addEventListener('click', () => {
-    const symbol = normalizeSymbol(symbolInput?.value) || currentSymbol || deriveTickerFallback;
-    loadForSymbol(symbol, { manual: false });
-  });
-  cleanupBtn.addEventListener('click', cleanupStorage);
-  copyBtn.addEventListener('click', copyJSON);
   if (debugToggle) {
     debugToggle.addEventListener('change', () => {
       debugEnabled = !!debugToggle.checked;
@@ -100,7 +93,7 @@
 
   function renderData(ticker, data) {
     tickerEl.textContent = ticker || '—';
-    storedContentEl.innerHTML = '';
+    if (storedContentEl) storedContentEl.innerHTML = '';
     if (storedPanelEl) storedPanelEl.open = !!data;
     if (!ticker) {
       setStatus('No ticker recognized from this URL', true);
@@ -120,7 +113,7 @@
     const summary = document.createElement('div');
     summary.className = 'small muted';
     summary.textContent = `Last Updated: ${updated}`;
-    storedContentEl.appendChild(summary);
+    //storedContentEl.appendChild(summary);
 
     // Top-level fields (selected known keys)
     const fields = [
@@ -173,8 +166,8 @@
         }
       }
     }
-    const usedLabels = new Set();
-    fields.forEach(k => {
+    //const usedLabels = new Set();
+    /*fields.forEach(k => {
       if (shallow[k] == null) return;
       const kElTitle = canonicalLabelFromKey(k);
       if (usedLabels.has(kElTitle)) return; // avoid duplicate Summary labels
@@ -237,13 +230,13 @@
       title.textContent = 'Summary Fields';
       storedContentEl.appendChild(title);
       storedContentEl.appendChild(grid);
-    }
+    }*/
 
     // Page Crawls per host
-    const crawls = data.pageCrawls || {};
-    const hostOrder = ['dilutiontracker','fintel'];
-    const hosts = Object.keys(crawls).sort((a,b) => (hostOrder.indexOf(a) === -1 ? 99 : hostOrder.indexOf(a)) - (hostOrder.indexOf(b) === -1 ? 99 : hostOrder.indexOf(b)));
-    hosts.forEach(host => {
+    //const crawls = data.pageCrawls || {};
+    //const hostOrder = ['dilutiontracker','fintel'];
+    //const hosts = Object.keys(crawls).sort((a,b) => (hostOrder.indexOf(a) === -1 ? 99 : hostOrder.indexOf(a)) - (hostOrder.indexOf(b) === -1 ? 99 : hostOrder.indexOf(b)));
+    /*hosts.forEach(host => {
       const payload = crawls[host];
       const section = document.createElement('div');
       section.className = 'host-section';
@@ -339,7 +332,7 @@
       }
 
       storedContentEl.appendChild(section);
-    });
+    });*/
 
     // Save last rendered for copy
     storedContentEl.dataset.json = JSON.stringify(data, null, 2);
@@ -832,10 +825,56 @@
 
   let hoverRequestId = 0;
 
+  function openAnalysisTabs(primaryUrl, secondaryUrl) {
+    try {
+      chrome.tabs.create({ url: primaryUrl, active: true });
+      chrome.tabs.create({ url: secondaryUrl, active: false });
+    } catch (err) {
+      window.open(primaryUrl, '_blank', 'noopener');
+      window.open(secondaryUrl, '_blank', 'noopener');
+    }
+  }
+
+  async function shareTooltipSnapshot(rootTooltip) {
+    const tooltip = rootTooltip || hoverContentEl?.querySelector('.shi-tooltip');
+    if (!tooltip) {
+      setStatus('Nothing to share yet — load a symbol first.', true);
+      return;
+    }
+    if (typeof html2canvas !== 'function') {
+      setStatus('Sharing unavailable (missing html2canvas).', true);
+      return;
+    }
+    try {
+      setStatus('Capturing tooltip…');
+      const canvas = await html2canvas(tooltip, {
+        backgroundColor: '#0d1117',
+        scale: window.devicePixelRatio || 2,
+        useCORS: true
+      });
+      const blob = await new Promise((resolve, reject) => {
+        canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('Snapshot failed')), 'image/png');
+      });
+      if (navigator.clipboard && window.ClipboardItem) {
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+        setStatus('Tooltip copied to clipboard.');
+      } else {
+        window.open(canvas.toDataURL('image/png'), '_blank');
+        setStatus('Snapshot opened in new tab (clipboard unavailable).');
+      }
+    } catch (err) {
+      console.error('❌ Share screenshot failed:', err);
+      setStatus('Failed to copy tooltip screenshot.', true);
+    }
+  }
+
   async function loadForSymbol(symbol, opts = {}) {
     const normalized = normalizeSymbol(symbol);
     currentSymbol = normalized || null;
     if (symbolInput && normalized) symbolInput.value = normalized;
+    if (normalized) {
+      chrome.storage.local.set({ [LAST_SYMBOL_STORAGE_KEY]: normalized }, () => {});
+    }
     if (tickerEl) tickerEl.textContent = normalized || '—';
 
     if (!normalized) {
@@ -979,6 +1018,12 @@
     return 'Unknown';
   }
 
+  function formatYesNoValue(value) {
+    if (value === true) return 'Yes';
+    if (value === false) return 'No';
+    return 'Unknown';
+  }
+
   function formatShortInterestDisplay(value) {
     const num = parseSharesValue(value);
     if (Number.isFinite(num)) {
@@ -1049,122 +1094,268 @@
 
     hoverContentEl.dataset.pack = JSON.stringify(pack, null, 2);
 
-    const header = document.createElement('div');
-    header.className = 'row';
-    header.style.alignItems = 'baseline';
-    const symEl = document.createElement('div'); symEl.className = 'key'; symEl.style.fontSize = '18px'; symEl.textContent = `$${symbol}`;
-    const updatedEl = document.createElement('div'); updatedEl.className = 'small muted';
-    if (pack.fetchedAt) {
-      const fetchedDate = new Date(pack.fetchedAt);
-      if (!isNaN(fetchedDate.valueOf())) {
-        updatedEl.textContent = `Updated: ${fetchedDate.toLocaleString()}`;
-      } else if (typeof pack.fetchedAt === 'string') {
-        updatedEl.textContent = pack.fetchedAt;
-      }
-    }
-    header.appendChild(symEl);
-    header.appendChild(updatedEl);
-    hoverContentEl.appendChild(header);
+    const factory = window.QSETooltipTemplate && typeof window.QSETooltipTemplate.createTooltipElement === 'function'
+      ? window.QSETooltipTemplate.createTooltipElement
+      : null;
+    const tooltip = factory ? factory() : null;
 
-    const linksRow = document.createElement('div');
-    linksRow.className = 'link-row';
-    linksRow.appendChild(createSourceLink('DilutionTracker', `https://dilutiontracker.com/app/search/${encodeURIComponent(symbol)}`));
-    linksRow.appendChild(createSourceLink('Fintel', `https://fintel.io/ss/us/${encodeURIComponent(symbol)}`));
-    hoverContentEl.appendChild(linksRow);
-
-    if (pack.regularMarketChange?.text || pack.extendedMarketChange?.text) {
-      const priceRow = document.createElement('div');
-      priceRow.className = 'small muted';
-      const parts = [];
-      if (pack.regularMarketChange?.text) parts.push(`Regular: ${pack.regularMarketChange.text}`);
-      if (pack.extendedMarketChange?.text) parts.push(`Extended: ${pack.extendedMarketChange.text}`);
-      priceRow.textContent = parts.join(' · ');
-      hoverContentEl.appendChild(priceRow);
+    if (!tooltip) {
+      hoverContentEl.innerHTML = '<div class="err small">Unable to render tooltip layout.</div>';
+      hoverContentEl.dataset.pack = '';
+      return;
     }
 
-    const coreRows = [
-      { label: 'Free Float', value: pack.float, formatter: formatSharesDisplay },
-      { label: 'Shares Outstanding', value: pack.sharesOutstanding, formatter: formatSharesDisplay },
-      { label: 'Market Cap', value: pack.marketCap, formatter: formatCurrencyDisplay },
-      { label: 'Estimated Cash', value: pack.estimatedCash, formatter: formatCurrencyDisplay },
-      { label: 'Institutional Ownership', value: formatPercentDisplay(pack.institutionalOwnership) },
-      { label: 'Enterprise Value', value: pack.enterpriseValue, formatter: formatCurrencyDisplay }
-    ];
+    tooltip.style.position = 'static';
+    tooltip.style.display = 'block';
+    tooltip.style.left = '0';
+    tooltip.style.top = '0';
+    tooltip.style.margin = '0 auto';
+    tooltip.style.maxWidth = '768px';
+    //tooltip.style.minWidth = '600px';
+    tooltip.style.width = '100%';
+    tooltip.style.boxShadow = 'none';
 
-    hoverContentEl.appendChild(createInfoCard('Core Financials', coreRows));
+    hoverContentEl.appendChild(tooltip);
+    populateTooltipFromPack(tooltip, symbol, pack);
+  }
 
-    const squeezeScoreEl = document.createElement('span');
-    squeezeScoreEl.textContent = 'Calculating…';
+  function populateTooltipFromPack(tooltip, symbol, pack) {
+    const safeSetText = (selector, value) => {
+      const element = tooltip.querySelector(selector);
+      if (!element) return;
+      const textValue = value === null || value === undefined ? 'N/A' : value;
+      element.textContent = textValue;
+    };
 
-    const shortRows = [
-      { label: 'Short Interest', value: pack.shortInterest, formatter: formatShortInterestDisplay },
-      { label: 'Short Interest Ratio', value: pack.shortInterestRatio, formatter: formatDaysValue },
-      { label: 'Short Float %', value: formatShortFloatPercentDisplay(pack.shortInterestPercentFloat, pack.shortInterest, pack.float) },
-      { label: 'Cost To Borrow', value: formatPercentDisplay(pack.costToBorrow) },
-      { label: 'Squeeze Score', valueEl: squeezeScoreEl },
-      { label: 'Short Shares Available', value: pack.shortSharesAvailable, formatter: formatSharesDisplay },
-      { label: 'Short-Exempt Volume', value: pack.finraExemptVolume, formatter: formatSharesDisplay },
-      { label: 'Failure To Deliver (FTDs)', value: pack.failureToDeliver, formatter: formatCurrencyDisplay },
-      { label: 'Reg SHO Min FTDs', value: pack.regShoMinFtds, formatter: formatRegShoShares }
-    ];
+    safeSetText('.shi-symbol', `$${symbol}`);
+    safeSetText('.shi-updated', pack.fetchedAt ? formatUpdatedTimestamp(pack.fetchedAt) : '');
 
-    hoverContentEl.appendChild(createInfoCard('Short Interest & Liquidity', shortRows));
+    const dtUrl = `https://dilutiontracker.com/app/search/${encodeURIComponent(symbol)}`;
+    const fintelUrl = `https://fintel.io/ss/us/${encodeURIComponent(symbol)}`;
 
-    updatePopupSqueezeScore(squeezeScoreEl, pack, symbol);
+    const dilutionLink = tooltip.querySelector('.refresh-data-link.dilutiontracker');
+    if (dilutionLink) {
+      dilutionLink.href = dtUrl;
+      dilutionLink.title = `Open DilutionTracker for ${symbol}`;
+      dilutionLink.onclick = (evt) => {
+        evt.preventDefault();
+        openAnalysisTabs(dtUrl, fintelUrl);
+      };
+    }
+    const fintelLink = tooltip.querySelector('.refresh-data-link.fintel');
+    if (fintelLink) {
+      fintelLink.href = fintelUrl;
+      fintelLink.title = `Open Fintel short squeeze data for ${symbol}`;
+      fintelLink.onclick = (evt) => {
+        evt.preventDefault();
+        openAnalysisTabs(dtUrl, fintelUrl);
+      };
+    }
 
-    const companyRows = [
-      { label: 'Country', value: pack.country || 'N/A' },
-      { label: 'Sector', value: pack.sector || 'N/A' },
-      { label: 'Industry', value: pack.industry || 'N/A' },
-      { label: 'Exchange', value: pack.exchange || 'N/A' },
-      { label: 'Options Trading', value: formatOptionsTrading(pack.optionsTradingEnabled) },
-      { label: 'Last Data Update', value: pack.lastDataUpdate || 'N/A' }
-    ];
+    const shareBtn = tooltip.querySelector('#share');
+    if (shareBtn) {
+      shareBtn.onclick = (evt) => {
+        evt.preventDefault();
+        shareTooltipSnapshot(tooltip);
+      };
+    }
 
-    hoverContentEl.appendChild(createInfoCard('Company Profile', companyRows));
+    const copyBtn = tooltip.querySelector('#copy');
+    if (copyBtn) {
+      copyBtn.onclick = (evt) => {
+        evt.preventDefault();
+        copyJSON();
+      };
+    }
+    /*const refreshBtn = tooltip.querySelector('.refresh-button');
+    if (refreshBtn) {
+      refreshBtn.onclick = (evt) => {
+        evt.preventDefault();
+        loadForSymbol(symbol, { manual: false });
+      };
+    }*/
 
-    const tablesWrap = document.createElement('div');
-    renderHoverTables(tablesWrap, pack);
-    if (tablesWrap.children.length) {
-      const title = document.createElement('div');
-      title.className = 'section-title';
-      title.textContent = 'Recent Borrow Data';
-      hoverContentEl.appendChild(title);
-      while (tablesWrap.firstChild) {
-        hoverContentEl.appendChild(tablesWrap.firstChild);
+    safeSetText('.shi-float', formatSharesDisplay(pack.float));
+    safeSetText('.shi-shares-outstanding', formatSharesDisplay(pack.sharesOutstanding));
+    safeSetText('.shi-market-cap', formatCurrencyDisplay(pack.marketCap));
+    safeSetText('.shi-est-cash', formatCurrencyDisplay(pack.estimatedCash));
+    safeSetText('.shi-institutional-ownership', formatPercentDisplay(pack.institutionalOwnership));
+    safeSetText('.shi-enterprise-value', formatCurrencyDisplay(pack.enterpriseValue));
+
+    safeSetText('.shi-short-interest', formatShortInterestDisplay(pack.shortInterest));
+    safeSetText('.shi-short-interest-ratio', formatDaysValue(pack.shortInterestRatio));
+    safeSetText('.shi-short-interest-percent-float', formatShortFloatPercentDisplay(pack.shortInterestPercentFloat, pack.shortInterest, pack.float));
+    safeSetText('.shi-cost-to-borrow', formatPercentDisplay(pack.costToBorrow));
+    safeSetText('.shi-short-shares-available', formatSharesDisplay(pack.shortSharesAvailable));
+    safeSetText('.shi-finra-exempt-volume', formatSharesDisplay(pack.finraExemptVolume));
+    safeSetText('.shi-failure-to-deliver', formatCurrencyDisplay(pack.failureToDeliver));
+    safeSetText('.shi-regsho-min-ftds', formatRegShoShares(pack.regShoMinFtds));
+
+    safeSetText('.shi-country', pack.country || 'N/A');
+    safeSetText('.shi-sector', pack.sector || 'N/A');
+    safeSetText('.shi-industry', pack.industry || 'N/A');
+    safeSetText('.shi-exchange', pack.exchange || 'N/A');
+    safeSetText('.shi-options-enabled', formatOptionsTrading(pack.optionsTradingEnabled));
+    safeSetText('.shi-regsho-threshold', formatYesNoValue(pack.regShoThreshold));
+    safeSetText('.shi-last-data-update', pack.lastDataUpdate || 'N/A');
+
+    const regularChangeEl = tooltip.querySelector('.shi-regular-change');
+    if (regularChangeEl) {
+      if (pack.regularMarketChange) {
+        regularChangeEl.textContent = pack.regularMarketChange.text || '';
+        if (pack.regularMarketChange.styles) {
+          regularChangeEl.setAttribute('style', pack.regularMarketChange.styles);
+        } else {
+          regularChangeEl.removeAttribute('style');
+        }
+      } else {
+        regularChangeEl.textContent = '';
+        regularChangeEl.removeAttribute('style');
       }
+    }
+
+    const extendedChangeEl = tooltip.querySelector('.shi-extended-change');
+    if (extendedChangeEl) {
+      if (pack.extendedMarketChange) {
+        extendedChangeEl.textContent = pack.extendedMarketChange.text || '';
+        if (pack.extendedMarketChange.styles) {
+          extendedChangeEl.setAttribute('style', pack.extendedMarketChange.styles);
+        } else {
+          extendedChangeEl.removeAttribute('style');
+        }
+      } else {
+        extendedChangeEl.textContent = '';
+        extendedChangeEl.removeAttribute('style');
+      }
+    }
+
+    const squeezeScoreEl = tooltip.querySelector('.shi-squeeze-score');
+    if (squeezeScoreEl) {
+      squeezeScoreEl.textContent = 'Calculating…';
+      updatePopupSqueezeScore(squeezeScoreEl, pack, symbol);
+    }
+
+    const rightCol = tooltip.querySelector('.shi-column-right');
+    renderTooltipTables(rightCol, pack);
+  }
+
+  function renderTooltipTables(container, data) {
+    if (!container) return;
+    container.innerHTML = '';
+
+    const configs = [
+      { key: 'shortBorrowRateTable', title: 'Cost To Borrow', maxRows: 5 },
+      { key: 'failsToDeliverTable', title: 'Failure To Deliver (FTDs)', maxRows: 5 },
+      { key: 'shortSharesAvailabilityTable', title: 'Short Shares Available', maxRows: 3, preferredColumns: ['timeSinceLastChange', 'shortSharesAvailability'] }
+    ];
+
+    let hasContent = false;
+
+    configs.forEach(cfg => {
+      const rows = Array.isArray(data?.[cfg.key]) ? data[cfg.key] : null;
+      if (!rows || !rows.length) return;
+      const card = buildTooltipTableCard(cfg.title, rows, cfg.maxRows || 5, cfg.preferredColumns || []);
+      if (card) {
+        container.appendChild(card);
+        hasContent = true;
+      }
+    });
+
+    if (!hasContent) {
+      const empty = document.createElement('div');
+      empty.className = 'shi-table-empty';
+      empty.textContent = 'No recent Fintel table data';
+      container.appendChild(empty);
     }
   }
 
-  function createInfoCard(title, rows) {
+  function buildTooltipTableCard(title, rows, maxRows, preferredColumns) {
+    const columns = deriveTooltipTableColumns(rows, preferredColumns);
+    if (!columns.length) return null;
+
     const card = document.createElement('div');
-    card.className = 'card';
-    if (title) {
-      const heading = document.createElement('div');
-      heading.className = 'section-title';
-      heading.textContent = title;
-      card.appendChild(heading);
-    }
-    const grid = document.createElement('div');
-    grid.className = 'grid2';
-    rows.forEach(row => {
-      if (!row) return;
-      const labelEl = document.createElement('div');
-      labelEl.className = 'k';
-      labelEl.textContent = row.label;
-      const valueEl = document.createElement('div');
-      valueEl.className = 'v';
-      if (row.valueEl) {
-        valueEl.appendChild(row.valueEl);
-      } else {
-        const val = row.formatter ? row.formatter(row.value) : row.value;
-        valueEl.textContent = val == null || val === '' ? 'N/A' : String(val);
-      }
-      grid.appendChild(labelEl);
-      grid.appendChild(valueEl);
+    card.className = 'shi-table-card';
+
+    const heading = document.createElement('div');
+    heading.className = 'shi-table-title';
+    heading.textContent = title;
+    card.appendChild(heading);
+
+    const table = document.createElement('table');
+    table.className = 'shi-mini-table';
+
+    const thead = document.createElement('thead');
+    const headRow = document.createElement('tr');
+    columns.forEach(col => {
+      const th = document.createElement('th');
+      th.textContent = prettifyTooltipColumnName(col);
+      headRow.appendChild(th);
     });
-    card.appendChild(grid);
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+    rows.slice(0, maxRows).forEach(row => {
+      const tr = document.createElement('tr');
+      columns.forEach(col => {
+        const td = document.createElement('td');
+        const val = row && Object.prototype.hasOwnProperty.call(row, col) ? row[col] : '';
+        td.textContent = val && String(val).trim() !== '' ? val : '—';
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+
+    card.appendChild(table);
     return card;
+  }
+
+  function deriveTooltipTableColumns(rows, preferredColumns) {
+    if (!rows || !rows.length) return [];
+    let columns = [];
+    if (preferredColumns && preferredColumns.length) {
+      columns = preferredColumns.filter(col => rows.some(row => row && row[col] != null && String(row[col]).trim() !== ''));
+    }
+    if (!columns.length) {
+      const set = new Set();
+      rows.forEach(row => {
+        Object.keys(row || {}).forEach(key => {
+          const value = row[key];
+          if (value != null && String(value).trim() !== '') {
+            set.add(key);
+          }
+        });
+      });
+      columns = Array.from(set);
+    }
+    if (columns.includes('date')) {
+      columns = ['date', ...columns.filter(col => col !== 'date')];
+    }
+    const seen = new Set();
+    columns = columns.filter(col => {
+      const key = String(col).toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    return columns.slice(0, 4);
+  }
+
+  function prettifyTooltipColumnName(name) {
+    if (!name) return '';
+    if (/\s/.test(name)) return name;
+    const spaced = name.replace(/_/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2');
+    return spaced.replace(/\b\w/g, ch => ch.toUpperCase());
+  }
+
+  function formatUpdatedTimestamp(value) {
+    if (!value) return '';
+    const date = new Date(value);
+    if (!isNaN(date.valueOf())) {
+      return `Updated: ${date.toLocaleString()}`;
+    }
+    return typeof value === 'string' ? value : '';
   }
 
   function updatePopupSqueezeScore(targetEl, pack, symbol) {
@@ -1217,74 +1408,22 @@
     });
   }
 
-  function renderHoverTables(container, data) {
-    const configs = [
-      { key: 'shortBorrowRateTable', title: 'Cost To Borrow', maxRows: 5 },
-      { key: 'failsToDeliverTable', title: 'Failure To Deliver (FTDs)', maxRows: 5 },
-      { key: 'shortSharesAvailabilityTable', title: 'Short Shares Available', maxRows: 3 }
-    ];
-
-    configs.forEach(cfg => {
-      const rows = Array.isArray(data?.[cfg.key]) ? data[cfg.key] : null;
-      if (!rows || !rows.length) return;
-      const columns = deriveHoverTableColumns(rows);
-      if (!columns.length) return;
-      const card = document.createElement('div');
-      card.className = 'card';
-      const title = document.createElement('div'); title.className = 'table-title'; title.textContent = cfg.title;
-      card.appendChild(title);
-      const headers = columns.map(prettifyHoverColumnName);
-      const table = makeTable(headers, rows.map(row => columns.map(col => row[col] ?? '')), cfg.maxRows || rows.length);
-      card.appendChild(table);
-      container.appendChild(card);
-    });
-  }
-
-  function deriveHoverTableColumns(rows) {
-    if (!rows || !rows.length) return [];
-    const set = new Set();
-    rows.forEach(row => {
-      Object.keys(row || {}).forEach(key => {
-        const value = row[key];
-        if (value != null && String(value).trim() !== '') {
-          set.add(key);
-        }
-      });
-    });
-    const columns = Array.from(set);
-    if (columns.includes('date')) {
-      const filtered = columns.filter(col => col !== 'date');
-      return ['date', ...filtered.slice(0, 3)];
-    }
-    return columns.slice(0, 4);
-  }
-
-  function prettifyHoverColumnName(name) {
-    if (!name) return '';
-    if (/\s/.test(name)) return name;
-    return name.replace(/_/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2').replace(/\b\w/g, ch => ch.toUpperCase());
-  }
-
-  function createSourceLink(label, href) {
-    const link = document.createElement('a');
-    link.className = 'link-pill';
-    link.href = href;
-    link.target = '_blank';
-    link.rel = 'noopener noreferrer';
-    link.textContent = label;
-    return link;
-  }
-
-
   async function loadInitial() {
     setStatus('Loading…');
     const tab = await getActiveTab();
     const href = tab?.url || '';
     urlEl.textContent = href || 'Unknown';
     deriveTickerFallback = deriveTickerFromUrl(href);
-    const initialSymbol = normalizeSymbol(symbolInput?.value) || deriveTickerFallback;
-    if (symbolInput && deriveTickerFallback && !symbolInput.value) {
-      symbolInput.value = deriveTickerFallback;
+    const storedSymbolRaw = await new Promise(resolve => {
+      chrome.storage.local.get(LAST_SYMBOL_STORAGE_KEY, data => {
+        resolve(data ? data[LAST_SYMBOL_STORAGE_KEY] : null);
+      });
+    });
+    const storedSymbol = normalizeSymbol(storedSymbolRaw);
+    const inputSymbol = normalizeSymbol(symbolInput?.value);
+    const initialSymbol = inputSymbol || storedSymbol || deriveTickerFallback;
+    if (symbolInput) {
+      symbolInput.value = initialSymbol || '';
     }
     // Clean storage once per popup open
     await cleanupStorage({ silent: true });

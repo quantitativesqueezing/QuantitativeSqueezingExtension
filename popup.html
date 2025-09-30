@@ -4,10 +4,11 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>QSI: Page Data</title>
+  <link rel="stylesheet" href="css/tooltip.css">
   <style>
     :root { color-scheme: light dark; }
     body { font: 12px/1.4 -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif; margin: 0; }
-    .wrap { width: 768px; max-height: 1500px; height: 100%; overflow: auto; padding: 12px; }
+    .wrap { width: 768px; padding: 20px; -webkit-box-sizing: border-box; -moz-box-sizing: border-box; -ms-box-sizing: border-box; -o-box-sizing: border-box; box-sizing: border-box; }
     .row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
     .small { font-size: 11px; opacity: 0.8; }
@@ -56,15 +57,7 @@
 
     .card { border: 1px solid rgba(0,0,0,.08); border-radius: 8px; padding: 8px 10px; margin: 8px 0; }
     @media (prefers-color-scheme: dark) { .card { border-color: rgba(255,255,255,.1); } }
-    #hoverContent > .card:first-child { margin-top: 0; }
     .table-title { font-weight: 600; margin-top: 6px; margin-bottom: 4px; }
-    .link-row { display:flex; gap:8px; flex-wrap:wrap; margin:8px 0; }
-    .link-pill { display:inline-flex; align-items:center; gap:4px; padding:3px 8px; border-radius:6px; border:1px solid rgba(37,99,235,0.35); background: rgba(37,99,235,0.08); color:#1d4ed8; text-decoration:none; font-size:12px; font-weight:600; }
-    .link-pill:hover { background: rgba(37,99,235,0.16); border-color: rgba(37,99,235,0.55); }
-    @media (prefers-color-scheme: dark) {
-      .link-pill { border-color: rgba(147,197,253,0.4); background: rgba(37,99,235,0.15); color:#93c5fd; }
-      .link-pill:hover { background: rgba(37,99,235,0.25); border-color: rgba(147,197,253,0.6); }
-    }
   </style>
 </head>
 <body>
@@ -75,10 +68,6 @@
         <span>Debug Mode</span>
       </label>
       <div id="status" class="small" style="margin-left:8px;">Loading…</div>
-      <div style="flex:1"></div>
-      <button id="refresh">Reload</button>
-      <button id="cleanup">Clean</button>
-      <button id="copy">JSON</button>
     </div>
     <div class="row small">
       <div>URL:</div>
@@ -94,11 +83,12 @@
 
     <div id="hoverContent"></div>
 
-    <details id="storedPanel" style="margin-top:12px;">
-      <summary class="key">Stored Page Data</summary>
+    <div id="storedPanel" style="margin-top:12px;">
       <div id="storedContent" style="margin-top:8px;"></div>
-    </details>
+    </div>
   </div>
+  <script src="libs/html2canvas.min.js"></script>
+  <script src="tooltip_template.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>
