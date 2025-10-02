@@ -79,6 +79,15 @@
       // DilutionTracker app search: /app/search/TICKER
       const m2 = s.match(/dilutiontracker\.com\/app\/search\/([A-Z]{1,5})(?:[/?#]|$)/i);
       if (m2) return m2[1].toUpperCase();
+      // Robinhood equities: /stocks/TICKER
+      const m3 = s.match(/robinhood\.com\/stocks\/([A-Z0-9\.-]{1,10})(?:[/?#]|$)/i);
+      if (m3) return m3[1].toUpperCase();
+      // Robinhood options contracts: underlying is before first dash
+      const m4 = s.match(/robinhood\.com\/options\/([A-Z0-9\.-]+?)-\d{6,8}-\d+[CP]/i);
+      if (m4) return m4[1].toUpperCase();
+      // Robinhood option chain views: /options/chain/TICKER
+      const m5 = s.match(/robinhood\.com\/options\/chain\/([A-Z0-9\.-]{1,10})(?:[/?#]|$)/i);
+      if (m5) return m5[1].toUpperCase();
       return null;
     } catch { return null; }
   }
@@ -826,13 +835,53 @@
   let hoverRequestId = 0;
 
   function openAnalysisTabs(primaryUrl, secondaryUrl) {
-    try {
-      chrome.tabs.create({ url: primaryUrl, active: true });
-      chrome.tabs.create({ url: secondaryUrl, active: false });
-    } catch (err) {
-      window.open(primaryUrl, '_blank', 'noopener');
-      window.open(secondaryUrl, '_blank', 'noopener');
+    if (primaryUrl) openTabAndScroll(primaryUrl, true);
+    if (secondaryUrl) openTabAndScroll(secondaryUrl, false);
+  }
+
+  function openTabAndScroll(url, makeActive) {
+    if (!url) return;
+    if (!chrome?.tabs?.create) {
+      window.open(url, '_blank', 'noopener');
+      return;
     }
+    try {
+      chrome.tabs.create({ url, active: !!makeActive }, (tab) => {
+        if (chrome.runtime.lastError || !tab || typeof tab.id !== 'number') {
+          window.open(url, '_blank', 'noopener');
+          return;
+        }
+        scheduleHalfScroll(tab.id);
+      });
+    } catch (err) {
+      window.open(url, '_blank', 'noopener');
+    }
+  }
+
+  function scheduleHalfScroll(tabId) {
+    if (!chrome?.scripting || !chrome.tabs?.onUpdated) return;
+    const listener = (updatedTabId, changeInfo) => {
+      if (updatedTabId === tabId && changeInfo && changeInfo.status === 'complete') {
+        chrome.tabs.onUpdated.removeListener(listener);
+        try {
+          chrome.scripting.executeScript({
+            target: { tabId },
+            func: () => {
+              const doc = document;
+              const fullHeight = Math.max(
+                doc.documentElement?.scrollHeight || 0,
+                doc.body?.scrollHeight || 0
+              );
+              const targetOffset = fullHeight > 0 ? fullHeight / 2 : window.innerHeight / 2;
+              window.scrollTo({ top: targetOffset, behavior: 'smooth' });
+            }
+          });
+        } catch (err) {
+          console.warn('⚠️ Failed to scroll newly opened tab', err);
+        }
+      }
+    };
+    chrome.tabs.onUpdated.addListener(listener);
   }
 
   async function shareTooltipSnapshot(rootTooltip) {
@@ -1424,6 +1473,10 @@
     const initialSymbol = inputSymbol || storedSymbol || deriveTickerFallback;
     if (symbolInput) {
       symbolInput.value = initialSymbol || '';
+      try {
+        symbolInput.focus({ preventScroll: true });
+        symbolInput.select();
+      } catch {}
     }
     // Clean storage once per popup open
     await cleanupStorage({ silent: true });

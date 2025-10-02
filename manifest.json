@@ -9,7 +9,7 @@
     "48": "icons/48.png",
     "128": "icons/128.png"
   },
-  "permissions": ["storage", "tabs"],
+  "permissions": ["storage", "tabs", "scripting"],
   "host_permissions": [
     "https://finviz.com/*",
     "https://fintel.io/*",
