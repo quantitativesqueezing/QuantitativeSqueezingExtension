@@ -33,6 +33,11 @@ console.log('🔍 Fintel content script loaded');
 const currentUrl = window.location.href;
 const tickerMatch = currentUrl.match(/fintel\.io\/ss\/us\/([A-Z]{1,5})/i);
 
+// Soft storage guard: keep some headroom below the 5MB chrome.storage quota
+const STORAGE_SOFT_LIMIT_BYTES = Math.floor(4.5 * 1024 * 1024); // ~4.5MB
+const STORAGE_TARGET_BYTES = Math.floor(3.8 * 1024 * 1024); // cleanup target to avoid thrashing
+const storageGuardEncoder = (typeof TextEncoder !== 'undefined') ? new TextEncoder() : null;
+
 if (tickerMatch) {
   const ticker = tickerMatch[1].toUpperCase();
   console.log(`📊 Detected Fintel ticker page: ${ticker}`);
@@ -132,7 +137,15 @@ async function crawlAndStoreStructuredPageData(ticker, hostKey = 'fintel') {
     const inferred = data.inferred || {};
     const merged = { ...existing, pageCrawls, lastUpdated: Date.now(), ...inferred };
 
-    await chrome.storage.local.set({ [storageKey]: merged });
+    const payload = { [storageKey]: merged };
+    const payloadBytes = estimateObjectBytes(payload);
+    const spaceOk = await ensureStorageCapacity(payloadBytes);
+    if (!spaceOk) {
+      console.warn(`🚫 Skipping structured crawl storage for ${ticker} (${hostKey}) to avoid chrome.storage quota errors`);
+      return;
+    }
+
+    await chrome.storage.local.set(payload);
     console.log(`💾 Stored structured crawl for ${ticker} (${hostKey})`, data, merged);
 
     // Highlighting removed by request
@@ -1475,12 +1488,18 @@ async function storeFintelDataIfChanged(ticker, newFintelData) {
       ...newFintelData,
       lastUpdated: Date.now() // Update timestamp
     };
-    
+
     // Store updated data
     const storageKey = `ticker_${ticker}`;
-    await chrome.storage.local.set({
-      [storageKey]: updatedData
-    });
+    const payload = { [storageKey]: updatedData };
+    const payloadBytes = estimateObjectBytes(payload);
+    const spaceOk = await ensureStorageCapacity(payloadBytes);
+    if (!spaceOk) {
+      console.warn(`🚫 Skipping Fintel data write for ${ticker} to avoid chrome.storage quota errors`);
+      return;
+    }
+
+    await chrome.storage.local.set(payload);
     
     console.log(`💾 Stored merged data for ${ticker}:`, updatedData);
     
@@ -1529,4 +1548,131 @@ function parseSharesToAbsolute(val) {
     if (unit === 'K') return Math.round(raw * 1e3);
     return Math.round(raw);
   } catch { return null; }
+}
+
+function estimateObjectBytes(obj) {
+  try {
+    const json = JSON.stringify(obj || {});
+    if (!json) return 0;
+    if (storageGuardEncoder) {
+      return storageGuardEncoder.encode(json).length;
+    }
+    return json.length;
+  } catch (error) {
+    console.warn('Storage guard: unable to estimate object size', error);
+    return 0;
+  }
+}
+
+async function ensureStorageCapacity(bytesNeeded = 0) {
+  try {
+    if (!chrome || !chrome.storage || !chrome.storage.local) return true;
+    if (typeof chrome.storage.local.getBytesInUse !== 'function') return true;
+  } catch {
+    return true;
+  }
+
+  const needed = Math.max(0, bytesNeeded || 0);
+  let currentBytes = await getCurrentStorageBytes();
+  if (currentBytes + needed <= STORAGE_SOFT_LIMIT_BYTES) {
+    return true;
+  }
+
+  let iterations = 0;
+  while (currentBytes + needed > STORAGE_SOFT_LIMIT_BYTES && iterations < 5) {
+    iterations += 1;
+    const cleaned = await evictOldTickerEntries(currentBytes + needed);
+    if (!cleaned) break;
+    currentBytes = await getCurrentStorageBytes();
+    if (currentBytes + needed <= STORAGE_SOFT_LIMIT_BYTES) {
+      return true;
+    }
+  }
+
+  console.warn('Storage guard: insufficient space after cleanup attempt');
+  return false;
+}
+
+async function evictOldTickerEntries(projectedBytesTotal) {
+  let allData;
+  try {
+    allData = await chrome.storage.local.get(null);
+  } catch (error) {
+    console.warn('Storage guard: unable to read chrome.storage for cleanup', error);
+    return false;
+  }
+
+  const tickerEntries = Object.entries(allData || {})
+    .filter(([key]) => key.startsWith('ticker_'))
+    .map(([key, value]) => ({
+      key,
+      lastUpdated: (value && value.lastUpdated) || 0,
+      bytes: estimateObjectBytes({ [key]: value })
+    }))
+    .sort((a, b) => (a.lastUpdated || 0) - (b.lastUpdated || 0));
+
+  if (!tickerEntries.length) {
+    console.warn('Storage guard: no ticker entries available for cleanup');
+    return false;
+  }
+
+  const keysToRemove = [];
+  let workingBytes = projectedBytesTotal;
+  for (const entry of tickerEntries) {
+    if (workingBytes <= STORAGE_TARGET_BYTES) break;
+    keysToRemove.push(entry.key);
+    workingBytes -= entry.bytes;
+  }
+
+  if (!keysToRemove.length) {
+    keysToRemove.push(tickerEntries[0].key);
+  }
+
+  try {
+    await chrome.storage.local.remove(keysToRemove);
+    await pruneTickerListByKeys(keysToRemove);
+    console.warn('Storage guard: removed old ticker entries to free space', keysToRemove);
+    return true;
+  } catch (error) {
+    console.warn('Storage guard: failed to remove old ticker entries', error);
+    return false;
+  }
+}
+
+function getCurrentStorageBytes() {
+  return new Promise((resolve) => {
+    try {
+      chrome.storage.local.getBytesInUse(null, (bytes) => {
+        if (typeof bytes === 'number' && !isNaN(bytes)) {
+          resolve(bytes);
+        } else {
+          resolve(0);
+        }
+      });
+    } catch (error) {
+      console.warn('Storage guard: getBytesInUse failed', error);
+      resolve(0);
+    }
+  });
+}
+
+async function pruneTickerListByKeys(storageKeys = []) {
+  if (!Array.isArray(storageKeys) || !storageKeys.length) return;
+  const tickers = storageKeys
+    .map((key) => (key.startsWith('ticker_') ? key.slice(7) : null))
+    .filter(Boolean);
+  if (!tickers.length) return;
+
+  const dropSet = new Set(tickers.map((t) => t.toUpperCase()));
+  try {
+    const result = await chrome.storage.local.get('ticker_list');
+    const list = result?.ticker_list || [];
+    if (!Array.isArray(list) || !list.length) return;
+    const filtered = list.filter((ticker) => !dropSet.has(String(ticker || '').toUpperCase()));
+    if (filtered.length !== list.length) {
+      await chrome.storage.local.set({ ticker_list: filtered });
+    }
+  } catch (error) {
+    console.warn('Storage guard: failed to prune ticker_list', error);
+  }
 }
