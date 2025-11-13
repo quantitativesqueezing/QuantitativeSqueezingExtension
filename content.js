@@ -36,6 +36,7 @@ const dailyCache = new Map(); // symbol -> { dayKey, pack }
 const minuteCache = new Map(); // url -> { ts, text }
 const hostLastHit = new Map();  // host -> ts
 const ONE_MINUTE = 60 * 1000;
+const ENABLE_HOVER_TOOLTIPS = false;
 
 function todayKey() {
   const now = new Date();
@@ -1200,7 +1201,7 @@ function humanNumber(n) {
 // Message listener removed - service worker handles fetch-pack messages
 
 /* Main pointer handler */
-document.addEventListener('mousemove', (event) => {
+if (ENABLE_HOVER_TOOLTIPS) document.addEventListener('mousemove', (event) => {
   const target = event.target;
   const pointerX = event.clientX;
   const pointerY = event.clientY;
@@ -1354,4 +1355,6 @@ document.addEventListener('mousemove', (event) => {
 });
 
 // Also hide on scroll or when leaving the tooltip
-document.addEventListener('scroll', () => hideTooltip(0), { passive: true });
+if (ENABLE_HOVER_TOOLTIPS) {
+  document.addEventListener('scroll', () => hideTooltip(0), { passive: true });
+}
